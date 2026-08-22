@@ -922,6 +922,23 @@ export function sanitizeLeafDirectoryName(inputName: string, label = 'directory 
 // ---------------------------
 //----------------- SESSION SYNCHRONIZER FILESYSTEM HELPERS ------------
 /**
+ * Resolves the most trustworthy "created at" instant from a `fs.Stats`-like
+ * object.
+ *
+ * Many filesystems (ext4 without inode birth-time support, overlayfs, tmpfs,
+ * proot/container mounts, etc.) don't track file birth time and report it as
+ * the epoch (`birthtimeMs === 0`). Treating that as a real timestamp makes
+ * every such file look infinitely old, so incremental scans that compare
+ * against `lastScanAt` silently drop it forever. Falling back to `mtime`
+ * (always populated) keeps "created after last scan" meaningful on those
+ * filesystems, at the cost of using "last modified" as a proxy for "created"
+ * only in that fallback case.
+ */
+export function resolveArtifactCreatedAtMs(fileStat: { birthtimeMs: number; mtimeMs: number }): number {
+  return fileStat.birthtimeMs > 0 ? fileStat.birthtimeMs : fileStat.mtimeMs;
+}
+
+/**
  * Recursively discovers files that match one extension, with optional incremental filtering.
  *
  * Provider synchronizers call this to find transcript artifacts under provider
@@ -955,7 +972,7 @@ export async function findFilesRecursivelyCreatedAfter(
       }
 
       const fileStat = await stat(fullPath);
-      if (fileStat.birthtime > lastScanAt) {
+      if (resolveArtifactCreatedAtMs(fileStat) > lastScanAt.getTime()) {
         fileList.push(fullPath);
       }
     }
@@ -979,7 +996,7 @@ export async function readFileTimestamps(
   try {
     const fileStat = await stat(filePath);
     return {
-      createdAt: fileStat.birthtime.toISOString(),
+      createdAt: new Date(resolveArtifactCreatedAtMs(fileStat)).toISOString(),
       updatedAt: fileStat.mtime.toISOString(),
     };
   } catch {
