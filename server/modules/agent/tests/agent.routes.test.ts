@@ -203,3 +203,35 @@ test('Agent route reuses a matching checkout without cloning or deleting it', as
   assert.deepEqual(spawnedArguments, [['config', '--get', 'remote.origin.url']]);
   assert.deepEqual(removedPaths, []);
 });
+
+test('Agent route runs Claude in a non-interactive permission mode, never bypassPermissions', async () => {
+  // This endpoint runs unattended (no client able to answer a permission
+  // prompt), so it must never ask the Claude runtime to bypass permissions —
+  // see claude-runtime.provider.js, which refuses bypassPermissions outright.
+  let capturedOptions: Record<string, unknown> | undefined;
+
+  await withAgentServer(createDependencies({
+    fileSystem: {
+      access: async () => undefined,
+    } as unknown as AgentDependencies['fileSystem'],
+    models: {
+      getProviderModels: async () => ({ models: { DEFAULT: 'default-model' } }),
+    } as unknown as AgentDependencies['models'],
+    queryClaude: (async (_command: string, options: Record<string, unknown>) => {
+      capturedOptions = options;
+    }) as AgentDependencies['queryClaude'],
+  }), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        projectPath: '/home/test/existing-project',
+        message: 'Run',
+        stream: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+  });
+
+  assert.equal(capturedOptions?.permissionMode, 'auto');
+});

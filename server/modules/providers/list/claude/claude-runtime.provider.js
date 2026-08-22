@@ -183,7 +183,7 @@ function matchesToolPermission(entry, toolName, input) {
 }
 
 function mapCliOptionsToSDK(options = {}) {
-  const { providerSessionId, cwd, toolsSettings, permissionMode, effort } = options;
+  const { providerSessionId, cwd, toolsSettings, permissionMode, effort, textOnly } = options;
 
   const sdkOptions = {};
 
@@ -199,7 +199,16 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.cwd = cwd;
   }
 
-  if (permissionMode && permissionMode !== 'default') {
+  // Hardened install: Claude must never run with permissions bypassed, no
+  // matter how the request asks for it — an explicit `permissionMode:
+  // 'bypassPermissions'` (e.g. from cycling the composer's mode picker,
+  // which persists per-session/per-provider in localStorage) or the legacy
+  // `toolsSettings.skipPermissions` toggle (persisted in the `claude-settings`
+  // localStorage key, so a value saved by an older session stays live until
+  // changed). Both are client-supplied and forwarded to the server as-is, so
+  // this check is the only point that can enforce it reliably. Every other
+  // mode (default, auto, acceptEdits, plan) is unaffected.
+  if (permissionMode && permissionMode !== 'default' && permissionMode !== 'bypassPermissions') {
     sdkOptions.permissionMode = permissionMode;
   }
 
@@ -208,10 +217,6 @@ function mapCliOptionsToSDK(options = {}) {
     disallowedTools: [],
     skipPermissions: false
   };
-
-  if (settings.skipPermissions && permissionMode !== 'plan') {
-    sdkOptions.permissionMode = 'bypassPermissions';
-  }
 
   let allowedTools = [...(settings.allowedTools || [])];
 
@@ -229,7 +234,12 @@ function mapCliOptionsToSDK(options = {}) {
   // Use the tools preset to make all default built-in tools available (including AskUserQuestion).
   // This was introduced in SDK 0.1.57. Omitting this preserves existing behavior (all tools available),
   // but being explicit ensures forward compatibility and clarity.
-  sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
+  //
+  // `textOnly` overrides this to an empty toolset: for callers whose task is pure text
+  // generation from data they already gathered themselves (e.g. AI commit-message
+  // generation, which hands Claude a pre-built diff), there is no permission mode that
+  // needs to be chosen — there is simply nothing Claude can invoke.
+  sdkOptions.tools = textOnly ? [] : { type: 'preset', preset: 'claude_code' };
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
@@ -640,7 +650,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       effortModels,
     });
 
-    const mcpServers = await loadMcpConfig(options.cwd);
+    // MCP servers contribute their own tools independently of `sdkOptions.tools`,
+    // so a `textOnly` run (no built-in tools, by design) must not load them either —
+    // otherwise a project's .mcp.json could hand it tool access anyway.
+    const mcpServers = options.textOnly ? null : await loadMcpConfig(options.cwd);
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
     }

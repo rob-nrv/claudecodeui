@@ -36,7 +36,10 @@ type ProviderCapabilities = {
 const PROVIDER_CAPABILITIES: Record<LLMProvider, ProviderCapabilities> = {
   claude: {
     provider: 'claude',
-    permissionModes: ['default', 'auto', 'acceptEdits', 'bypassPermissions', 'plan'],
+    // 'bypassPermissions' deliberately excluded: the Claude runtime
+    // (claude-runtime.provider.js) refuses to honor it regardless of what a
+    // client requests, so it is never offered as a selectable/cyclable mode.
+    permissionModes: ['default', 'auto', 'acceptEdits', 'plan'],
     defaultPermissionMode: 'default',
     supportsImages: true,
     supportsFiles: true,

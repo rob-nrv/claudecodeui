@@ -43,7 +43,7 @@ const getProviderCommand = ({
   }
 
   if (provider === 'claude') {
-    return 'claude --dangerously-skip-permissions /login';
+    return 'claude /login';
   }
 
   if (provider === 'cursor') {
@@ -58,7 +58,7 @@ const getProviderCommand = ({
     return 'opencode auth login';
   }
 
-  return 'claude --dangerously-skip-permissions /login';
+  return 'claude /login';
 };
 
 const getProviderTitle = (provider: LLMProvider) => {

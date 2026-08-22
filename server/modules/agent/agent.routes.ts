@@ -991,7 +991,12 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
           sessionId: sessionId || null,
           model: model,
           effort,
-          permissionMode: 'bypassPermissions' // Bypass all permissions for API calls
+          // Hardened install: bypassPermissions is refused server-side for Claude
+          // (see mapCliOptionsToSDK). This route runs unattended with no client
+          // able to answer a permission prompt, so 'auto' is the mode that keeps
+          // it working non-interactively — a model classifier approves/denies
+          // each tool call instead of an unconditional bypass.
+          permissionMode: 'auto'
         }, writer);
 
       } else if (provider === 'cursor') {

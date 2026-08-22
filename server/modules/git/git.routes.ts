@@ -1093,8 +1093,12 @@ Generate the commit message:`;
     if (provider === 'claude') {
       await queryClaudeSDK(prompt, {
         cwd: projectPath,
-        permissionMode: 'bypassPermissions',
-        model: 'sonnet'
+        model: 'sonnet',
+        // The diff/file contents are already embedded in `prompt` above, so Claude
+        // never needs to call a tool to write this message — disable its toolset
+        // entirely instead of requesting a permission bypass it no longer has
+        // access to (bypassPermissions is refused server-side for Claude).
+        textOnly: true
       }, writer);
     } else if (provider === 'cursor') {
       await spawnCursor(prompt, {
