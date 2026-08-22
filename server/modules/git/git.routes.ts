@@ -289,6 +289,25 @@ function buildFilePathCandidates(projectPath, repositoryRootPath, filePath) {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+// Extracts the index/worktree status codes from a single-path
+// `git status --porcelain -- <path>` line (`XY <path>`). Returns null when
+// the path has no difference from HEAD (empty output).
+function parseSingleFileStatus(statusOutput) {
+  const line = statusOutput.split('\n').find((candidateLine) => candidateLine.length >= 2);
+  return line ? { indexStatus: line[0], worktreeStatus: line[1] } : null;
+}
+
+// A path is already staged exactly as it should be committed when the index
+// differs from HEAD (something IS staged) and the working tree has no further
+// delta on top of that — this includes an already-staged deletion, where the
+// file no longer exists on disk at all. Re-running `git add` there isn't just
+// redundant: it fails outright, since `git add` needs a worktree delta to
+// record and none is left for its pathspec to match
+// (`fatal: pathspec '<file>' did not match any files`).
+function isFullyStaged(status) {
+  return Boolean(status) && status.indexStatus !== ' ' && status.worktreeStatus === ' ';
+}
+
 async function resolveRepositoryFilePath(projectPath, filePath) {
   validateFilePath(filePath);
 
@@ -301,6 +320,7 @@ async function resolveRepositoryFilePath(projectPath, filePath) {
       return {
         repositoryRootPath,
         repositoryRelativeFilePath: candidateFilePath,
+        status: parseSingleFileStatus(stdout),
       };
     }
   }
@@ -315,9 +335,14 @@ async function resolveRepositoryFilePath(projectPath, filePath) {
     );
 
     if (suffixMatches.length === 1) {
+      const recoveredFilePath = suffixMatches[0];
+      const { stdout: recoveredStatusOutput } = await spawnAsync(
+        'git', ['status', '--porcelain', '--', recoveredFilePath], { cwd: repositoryRootPath },
+      );
       return {
         repositoryRootPath,
-        repositoryRelativeFilePath: suffixMatches[0],
+        repositoryRelativeFilePath: recoveredFilePath,
+        status: parseSingleFileStatus(recoveredStatusOutput),
       };
     }
   }
@@ -325,7 +350,25 @@ async function resolveRepositoryFilePath(projectPath, filePath) {
   return {
     repositoryRootPath,
     repositoryRelativeFilePath: candidateFilePaths[0],
+    status: null,
   };
+}
+
+/**
+ * Stages `filePath` for the next commit unless it's already staged exactly as
+ * it should be committed (see isFullyStaged) — shared by /commit and /stage
+ * so both endpoints treat "already staged" the same way instead of each
+ * re-running `git add` unconditionally.
+ */
+async function stageRepositoryFile(projectPath, filePath) {
+  const { repositoryRootPath, repositoryRelativeFilePath, status } = await resolveRepositoryFilePath(projectPath, filePath);
+
+  if (isFullyStaged(status)) {
+    return { repositoryRootPath, repositoryRelativeFilePath, staged: false };
+  }
+
+  await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+  return { repositoryRootPath, repositoryRelativeFilePath, staged: true };
 }
 
 // Get Git status for a project; parsing is isolated in git-parsing.service.ts.
@@ -631,8 +674,7 @@ router.post('/commit', async (req, res) => {
     
     // Stage selected files
     for (const file of files) {
-      const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
-      await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      await stageRepositoryFile(projectPath, file);
     }
 
     // Commit with message
@@ -657,11 +699,9 @@ router.post('/stage', async (req, res) => {
   try {
     const projectPath = await getActualProjectPath(project);
     await validateGitRepository(projectPath);
-    const repositoryRootPath = await getRepositoryRootPath(projectPath);
 
     for (const file of files) {
-      const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
-      await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      await stageRepositoryFile(projectPath, file);
     }
 
     res.json({ success: true });
