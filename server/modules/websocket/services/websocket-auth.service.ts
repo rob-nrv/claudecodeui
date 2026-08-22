@@ -10,6 +10,7 @@ type WebSocketAuthDependencies = {
     username?: string;
     [key: string]: unknown;
   } | null;
+  allowedOrigins: Set<string>;
 };
 
 /**
@@ -20,6 +21,15 @@ export function verifyWebSocketClient(
   dependencies: WebSocketAuthDependencies
 ): boolean {
   const request = info.req as AuthenticatedWebSocketRequest;
+
+  // `cors()` only covers Express HTTP routes; the ws upgrade handshake needs
+  // its own check against the same allowlist (no wildcard, "null" never matches).
+  const origin = request.headers.origin;
+  if (origin && !dependencies.allowedOrigins.has(origin)) {
+    console.log('[WARN] WebSocket connection rejected for origin:', origin);
+    return false;
+  }
+
   const upgradeUrl = new URL(request.url ?? '/', 'http://localhost');
   const loggedUrl = new URL(upgradeUrl);
   if (loggedUrl.searchParams.has('token')) {

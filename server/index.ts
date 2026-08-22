@@ -17,7 +17,7 @@ import {
 } from '@/modules/providers/index.js';
 import { createWebSocketServer } from '@/modules/websocket/index.js';
 
-import { getConnectableHost } from '../shared/networkHosts.js';
+import { getConnectableHost, buildLoopbackOrigins, resolveBindHost } from '../shared/networkHosts.js';
 
 import { createGitModule } from './modules/git/index.js';
 import {
@@ -78,6 +78,15 @@ console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
 const app = express();
 const server = http.createServer(app);
+
+const SERVER_PORT = Number.parseInt(process.env.SERVER_PORT || '3001', 10);
+const VITE_PORT = process.env.VITE_PORT || 5173;
+
+// Local-only UI: only the app's own origins (backend + Vite dev server) may
+// make cross-origin requests. No wildcard, and the literal "null" origin
+// (sandboxed iframes/data: URIs) is never matched since it's never added here.
+const ALLOWED_ORIGINS = buildLoopbackOrigins([SERVER_PORT, VITE_PORT]);
+
 const queryClaude = providerRuntimeService.getRunner('claude');
 const queryCursor = providerRuntimeService.getRunner('cursor');
 const queryCodex = providerRuntimeService.getRunner('codex');
@@ -98,6 +107,7 @@ const wss = createWebSocketServer(server, {
     verifyClient: {
         isPlatform: IS_PLATFORM,
         authenticateWebSocket,
+        allowedOrigins: ALLOWED_ORIGINS,
     },
     chat: {
         runtime: providerRuntimeService,
@@ -118,7 +128,12 @@ const wss = createWebSocketServer(server, {
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
-app.use(cors({ exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'] }));
+app.use(cors({
+    origin(origin, callback) {
+        callback(null, !origin || ALLOWED_ORIGINS.has(origin));
+    },
+    exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'],
+}));
 app.use(express.json({
     limit: '50mb',
     type: (req) => {
@@ -271,10 +286,8 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-const SERVER_PORT = Number.parseInt(process.env.SERVER_PORT || '3001', 10);
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = resolveBindHost(process.env.HOST);
 const DISPLAY_HOST = getConnectableHost(HOST);
-const VITE_PORT = process.env.VITE_PORT || 5173;
 const LOCAL_SERVER_MARKER_PATH = path.join(os.homedir(), '.cloudcli', 'local-server.json');
 
 function getErrorCode(error: unknown): string | undefined {
