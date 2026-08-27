@@ -561,6 +561,45 @@ export type ProviderAuthStatus = {
   error?: string;
 };
 
+/**
+ * Multi-account Claude profile model (`MULTI_ACCOUNT_SPEC.md` §3.1).
+ *
+ * This is the API-facing shape only: it deliberately excludes
+ * `configDirectory` and any credential material. The frontend never sees
+ * either — see §3.4/§5.2 of the spec.
+ */
+export type ClaudeProfileConnectionState = 'connected' | 'expired' | 'not_authenticated' | 'unknown';
+
+export type ClaudeProfileVerificationMethod = 'cli_probe' | 'credentials_file' | 'none';
+
+export type ClaudeProfileVerifiedIdentity = {
+  value: string;
+  method: ClaudeProfileVerificationMethod;
+  tier: string | null;
+  verifiedAt: number;
+};
+
+export type ClaudeProfile = {
+  id: string;
+  displayName: string;
+  connectionState: ClaudeProfileConnectionState;
+  verifiedIdentity: ClaudeProfileVerifiedIdentity | null;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Parsed, non-interactive `claude auth status` JSON (`MULTI_ACCOUNT_SPEC.md` §4.3). */
+export type ClaudeAuthStatusProbeResult = {
+  loggedIn: boolean;
+  authMethod: string | null;
+  apiProvider: string | null;
+  email: string | null;
+  orgId: string | null;
+  orgName: string | null;
+  subscriptionType: string | null;
+};
+
 // ---------------------------
 //----------------- SHARED DATABASE CREDENTIAL TYPES ------------
 /**

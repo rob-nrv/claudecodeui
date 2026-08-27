@@ -4,6 +4,7 @@ import { promises as fsPromises } from 'node:fs';
 
 import chokidar, { type FSWatcher } from 'chokidar';
 
+import { claudeHomeFor } from '@/modules/claude-profiles/index.js';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
@@ -15,7 +16,7 @@ type WatcherEventType = 'add' | 'change';
 const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> = [
   {
     provider: 'claude',
-    rootPath: path.join(os.homedir(), '.claude', 'projects'),
+    rootPath: path.join(claudeHomeFor(), 'projects'),
   },
   {
     provider: 'cursor',

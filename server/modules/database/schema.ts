@@ -160,6 +160,31 @@ CREATE TABLE IF NOT EXISTS provider_models (
 );
 `;
 
+/**
+ * Multi-account Claude profiles (`MULTI_ACCOUNT_SPEC.md` §3).
+ *
+ * `config_directory` is the resolved `CLAUDE_CONFIG_DIR` for this profile and
+ * is decided once at creation time (never recomputed), so removing/adding
+ * other profiles later can never retarget an existing one's isolated data.
+ * `verified_identity_*` columns cache the last successful `claude auth
+ * status` probe; they are all NULL until the first verification.
+ */
+export const CLAUDE_PROFILES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS claude_profiles (
+    id TEXT PRIMARY KEY NOT NULL,
+    display_name TEXT NOT NULL,
+    config_directory TEXT NOT NULL,
+    is_default BOOLEAN NOT NULL DEFAULT 0,
+    connection_state TEXT NOT NULL DEFAULT 'unknown',
+    verified_identity_value TEXT,
+    verified_identity_method TEXT,
+    verified_identity_tier TEXT,
+    verified_identity_verified_at INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -207,4 +232,7 @@ ${APP_CONFIG_TABLE_SCHEMA_SQL}
 ${PROVIDER_MODELS_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_provider_models_provider_order
 ON provider_models(provider, sort_order, id);
+
+${CLAUDE_PROFILES_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_claude_profiles_is_default ON claude_profiles(is_default);
 `;

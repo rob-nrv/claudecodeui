@@ -2,6 +2,7 @@ import { Database } from 'better-sqlite3';
 
 import {
   APP_CONFIG_TABLE_SCHEMA_SQL,
+  CLAUDE_PROFILES_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
   NOTIFICATION_CHANNEL_ENDPOINTS_TABLE_SCHEMA_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
@@ -477,6 +478,9 @@ export const runMigrations = (db: Database) => {
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider_order
       ON provider_models(provider, sort_order, id)
     `);
+
+    db.exec(CLAUDE_PROFILES_TABLE_SCHEMA_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_claude_profiles_is_default ON claude_profiles(is_default)');
 
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);

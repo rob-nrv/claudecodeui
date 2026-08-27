@@ -356,6 +356,40 @@ export const api = {
       }),
   },
 
+  // Claude multi-account profile endpoints. Responses never carry a
+  // profile's configDirectory or credentials — see MULTI_ACCOUNT_SPEC.md §3.4.
+  claudeProfiles: {
+    list: () => authenticatedFetch('/api/claude-profiles'),
+
+    create: (displayName) =>
+      authenticatedFetch('/api/claude-profiles', {
+        method: 'POST',
+        body: JSON.stringify({ displayName }),
+      }),
+
+    rename: (id, displayName) =>
+      authenticatedFetch(`/api/claude-profiles/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ displayName }),
+      }),
+
+    setDefault: (id) =>
+      authenticatedFetch(`/api/claude-profiles/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isDefault: true }),
+      }),
+
+    remove: (id) =>
+      authenticatedFetch(`/api/claude-profiles/${id}`, {
+        method: 'DELETE',
+      }),
+
+    verify: (id) =>
+      authenticatedFetch(`/api/claude-profiles/${id}/verify`, {
+        method: 'POST',
+      }),
+  },
+
   // Generic GET method for any endpoint
   get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
 

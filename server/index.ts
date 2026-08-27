@@ -41,6 +41,7 @@ import {
     stopAllPlugins,
 } from './modules/plugins/index.js';
 import providerRoutes from './modules/providers/provider.routes.js';
+import claudeProfilesRoutes from './modules/claude-profiles/claude-profiles.routes.js';
 import { voiceRoutes } from './modules/voice/index.js';
 import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
 import { assetsRoutes } from './modules/assets/index.js';
@@ -48,7 +49,7 @@ import { fileTreeRoutes } from './modules/file-tree/index.js';
 import { worktreesRoutes } from './modules/worktrees/index.js';
 import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
 import { browserUseService } from './modules/browser-use/browser-use.service.js';
-import { initializeDatabase, sessionsDb } from './modules/database/index.js';
+import { claudeProfilesDb, initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
@@ -121,6 +122,7 @@ const wss = createWebSocketServer(server, {
 
             return null;
         },
+        resolveClaudeProfileConfigDir: (profileId) => claudeProfilesDb.getById(profileId)?.configDirectory ?? null,
     },
     getPluginPort,
 });
@@ -205,6 +207,9 @@ app.use('/api/browser-use', authenticateToken, browserUseRoutes);
 
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
+
+// Claude multi-account profile routes (protected)
+app.use('/api/claude-profiles', authenticateToken, claudeProfilesRoutes);
 
 // Agent API Routes (uses API key authentication)
 app.use('/api/agent', agentRoutes);

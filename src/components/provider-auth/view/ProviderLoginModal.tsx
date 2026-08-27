@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
 import { IS_PLATFORM } from '../../../shared/utils';
 import type { LLMProvider } from '../../../types/app';
+import { createModalCloseHandler } from '../utils/modalCloseHandler';
 
 /**
  * For empty shell instances where no project is provided,
@@ -27,6 +28,14 @@ type ProviderLoginModalProps = {
   onComplete?: (exitCode: number) => void;
   customCommand?: string;
   isAuthenticated?: boolean;
+  /**
+   * Opaque Claude profile id for the multi-account "Login"/"Re-login" flow
+   * (`ClaudeAccountsSection.tsx`). The backend resolves it to a validated,
+   * isolated `CLAUDE_CONFIG_DIR` for this one login shell only — never a
+   * path chosen by the frontend. Omitted for the historical/default account,
+   * whose login behaves exactly as before.
+   */
+  claudeProfileId?: string | null;
 };
 
 const getProviderCommand = ({
@@ -76,6 +85,7 @@ export default function ProviderLoginModal({
   onComplete,
   customCommand,
   isAuthenticated = false,
+  claudeProfileId = null,
 }: ProviderLoginModalProps) {
   if (!isOpen) {
     return null;
@@ -89,13 +99,15 @@ export default function ProviderLoginModal({
     // Keep the modal open so users can read terminal output before closing.
   };
 
+  const handleClose = createModalCloseHandler(handleComplete, onClose);
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-50 max-md:items-stretch max-md:justify-stretch">
       <div className="flex h-3/4 w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl dark:bg-gray-800 max-md:m-0 max-md:h-full max-md:max-w-none max-md:rounded-none md:m-4 md:h-3/4 md:max-w-4xl md:rounded-lg">
         <div className="flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-700">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h3>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
             aria-label="Close login modal"
           >
@@ -104,7 +116,13 @@ export default function ProviderLoginModal({
         </div>
 
         <div className="flex-1 overflow-hidden">
-          <StandaloneShell project={DEFAULT_PROJECT_FOR_EMPTY_SHELL} command={command} onComplete={handleComplete} minimal={true} />
+          <StandaloneShell
+            project={DEFAULT_PROJECT_FOR_EMPTY_SHELL}
+            command={command}
+            onComplete={handleComplete}
+            minimal={true}
+            claudeProfileId={claudeProfileId}
+          />
         </div>
       </div>
     </div>

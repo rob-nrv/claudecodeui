@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import { claudeHomeFor } from '@/modules/claude-profiles/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import type { AnyRecord } from '@/shared/types.js';
 import { AppError, getOpenCodeDatabasePath } from '@/shared/utils.js';
@@ -322,8 +323,7 @@ export function createProviderTokenUsageService(
 
         const encodedProjectPath = session.project_path.replace(/[^a-zA-Z0-9-]/g, '-');
         const projectDirectory = path.join(
-          dependencies.getHomeDirectory(),
-          '.claude',
+          claudeHomeFor(undefined, dependencies.getHomeDirectory()),
           'projects',
           encodedProjectPath,
         );

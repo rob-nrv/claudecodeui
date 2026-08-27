@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { runClaudeAuthStatusProbe } from '@/modules/claude-profiles/index.js';
 import { ClaudeProviderAuth } from '@/modules/providers/list/claude/claude-auth.provider.js';
 
 // checkCredentials() is private, but unlike getStatus() it never shells out to the
@@ -106,33 +107,216 @@ test('checkCredentials: CLAUDE_CODE_OAUTH_TOKEN configured via settings.json env
   });
 });
 
-test('checkCredentials: no CLAUDE_CODE_OAUTH_TOKEN, valid credentials file falls back to credentials_file', async () => {
-  await withTempHome(async (homeDir) => {
-    await writeCredentialsFile(homeDir, {
-      claudeAiOauth: { accessToken: 'valid-token', expiresAt: Date.now() + 60 * 60 * 1000 },
-      email: 'someone@example.com',
-    });
+// The old `.credentials.json` hand-parsing this replaced is gone entirely
+// (CLOUDCLI_EXTENSION_PLAN.md §3): with no env vars set, checkCredentials()
+// now falls through to `claude auth status`, injected here via the
+// constructor so these tests never depend on the real CLI being installed.
 
+test('checkCredentials: claude auth status loggedIn:true maps to authenticated with the real email, never a placeholder', async () => {
+  await withTempHome(async () => {
     await withEnv({}, async () => {
-      const status = await checkCredentials(new ClaudeProviderAuth());
+      const auth = new ClaudeProviderAuth({
+        probeAuthStatus: async () => ({
+          loggedIn: true,
+          authMethod: 'claude.ai',
+          apiProvider: 'firstParty',
+          email: 'someone@example.com',
+          orgId: 'org_1',
+          orgName: 'Acme',
+          subscriptionType: 'pro',
+        }),
+      });
+      const status = await checkCredentials(auth);
       assert.equal(status.authenticated, true);
-      assert.equal(status.method, 'credentials_file');
+      assert.equal(status.method, 'cli_probe');
       assert.equal(status.email, 'someone@example.com');
     });
   });
 });
 
-test('checkCredentials: no CLAUDE_CODE_OAUTH_TOKEN, expired credentials file reports not authenticated', async () => {
-  await withTempHome(async (homeDir) => {
-    await writeCredentialsFile(homeDir, {
-      claudeAiOauth: { accessToken: 'stale-token', expiresAt: 1_000_000_000_000 },
-    });
-
+test('checkCredentials: claude auth status loggedIn:false reports not authenticated', async () => {
+  await withTempHome(async () => {
     await withEnv({}, async () => {
-      const status = await checkCredentials(new ClaudeProviderAuth());
+      const auth = new ClaudeProviderAuth({
+        probeAuthStatus: async () => ({
+          loggedIn: false,
+          authMethod: 'none',
+          apiProvider: 'firstParty',
+          email: null,
+          orgId: null,
+          orgName: null,
+          subscriptionType: null,
+        }),
+      });
+      const status = await checkCredentials(auth);
       assert.equal(status.authenticated, false);
-      assert.match(status.error ?? '', /expired/i);
+      assert.equal(status.email, null);
     });
+  });
+});
+
+test('checkCredentials: a claude auth status command failure (null probe) reports not authenticated, never a fake identity', async () => {
+  await withTempHome(async () => {
+    await withEnv({}, async () => {
+      const auth = new ClaudeProviderAuth({ probeAuthStatus: async () => null });
+      const status = await checkCredentials(auth);
+      assert.equal(status.authenticated, false);
+      assert.equal(status.email, null);
+      assert.ok(status.error);
+    });
+  });
+});
+
+test('getStatus: authenticated with no email never substitutes a literal "Authenticated" identity', async () => {
+  await withTempHome(async () => {
+    await withEnv({}, async () => {
+      // loggedIn:true with no email is a real (if unusual) probe outcome —
+      // the bug this REPLACE fixes (CLOUDCLI_EXTENSION_PLAN.md §3) was
+      // exactly this case rendering a confident but fake identity.
+      const auth = new ClaudeProviderAuth({
+        probeAuthStatus: async () => ({
+          loggedIn: true,
+          authMethod: 'claude.ai',
+          apiProvider: 'firstParty',
+          email: null,
+          orgId: null,
+          orgName: null,
+          subscriptionType: null,
+        }),
+      });
+      const status = await auth.getStatus();
+      assert.equal(status.authenticated, true);
+      assert.equal(status.email, null);
+      assert.notEqual(status.email, 'Authenticated');
+    });
+  });
+});
+
+// Exercises the real, non-injected `runClaudeAuthStatusProbe` end to end
+// (real subprocess spawn) against a tiny stand-in "claude" executable, so the
+// spawn/env/JSON-parsing plumbing itself is covered, not just the mapping.
+
+const FAKE_CLI_SCRIPT = `#!/bin/sh
+if [ -n "$FAKE_CLAUDE_LOG_PATH" ]; then
+  printf '%s' "$CLAUDE_CONFIG_DIR" > "$FAKE_CLAUDE_LOG_PATH"
+fi
+printf '%s' "$FAKE_CLAUDE_STDOUT"
+exit "\${FAKE_CLAUDE_EXIT_CODE:-0}"
+`;
+
+const withFakeClaudeCli = async (fn: (cliPath: string, logPath: string) => Promise<void>) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'fake-claude-cli-'));
+  const cliPath = path.join(dir, 'claude');
+  const logPath = path.join(dir, 'config-dir.log');
+  await writeFile(cliPath, FAKE_CLI_SCRIPT, 'utf8');
+  await chmod(cliPath, 0o755);
+
+  const previousCliPath = process.env.CLAUDE_CLI_PATH;
+  process.env.CLAUDE_CLI_PATH = cliPath;
+  try {
+    await fn(cliPath, logPath);
+  } finally {
+    if (previousCliPath === undefined) {
+      delete process.env.CLAUDE_CLI_PATH;
+    } else {
+      process.env.CLAUDE_CLI_PATH = previousCliPath;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+test('runClaudeAuthStatusProbe: valid JSON, loggedIn true parses every field', async () => {
+  await withFakeClaudeCli(async (_cliPath, logPath) => {
+    process.env.FAKE_CLAUDE_STDOUT = JSON.stringify({
+      loggedIn: true,
+      authMethod: 'claude.ai',
+      apiProvider: 'firstParty',
+      email: 'robin@example.com',
+      orgId: 'org_42',
+      orgName: 'Acme',
+      subscriptionType: 'pro',
+    });
+    process.env.FAKE_CLAUDE_LOG_PATH = logPath;
+    try {
+      const result = await runClaudeAuthStatusProbe('/tmp/some-profile-dir');
+      assert.deepEqual(result, {
+        loggedIn: true,
+        authMethod: 'claude.ai',
+        apiProvider: 'firstParty',
+        email: 'robin@example.com',
+        orgId: 'org_42',
+        orgName: 'Acme',
+        subscriptionType: 'pro',
+      });
+      assert.equal(await readFile(logPath, 'utf8'), '/tmp/some-profile-dir');
+    } finally {
+      delete process.env.FAKE_CLAUDE_STDOUT;
+      delete process.env.FAKE_CLAUDE_LOG_PATH;
+    }
+  });
+});
+
+test('runClaudeAuthStatusProbe: valid JSON, loggedIn false', async () => {
+  await withFakeClaudeCli(async () => {
+    process.env.FAKE_CLAUDE_STDOUT = JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' });
+    try {
+      const result = await runClaudeAuthStatusProbe();
+      assert.equal(result?.loggedIn, false);
+    } finally {
+      delete process.env.FAKE_CLAUDE_STDOUT;
+    }
+  });
+});
+
+test('runClaudeAuthStatusProbe: non-zero exit (command failure) resolves null, never a fabricated result', async () => {
+  await withFakeClaudeCli(async () => {
+    process.env.FAKE_CLAUDE_STDOUT = 'error: not logged in';
+    process.env.FAKE_CLAUDE_EXIT_CODE = '1';
+    try {
+      const result = await runClaudeAuthStatusProbe();
+      assert.equal(result, null);
+    } finally {
+      delete process.env.FAKE_CLAUDE_STDOUT;
+      delete process.env.FAKE_CLAUDE_EXIT_CODE;
+    }
+  });
+});
+
+test('runClaudeAuthStatusProbe: malformed/invalid JSON resolves null', async () => {
+  await withFakeClaudeCli(async () => {
+    process.env.FAKE_CLAUDE_STDOUT = '{ not valid json';
+    try {
+      const result = await runClaudeAuthStatusProbe();
+      assert.equal(result, null);
+    } finally {
+      delete process.env.FAKE_CLAUDE_STDOUT;
+    }
+  });
+});
+
+test('runClaudeAuthStatusProbe: JSON missing the required loggedIn field resolves null', async () => {
+  await withFakeClaudeCli(async () => {
+    process.env.FAKE_CLAUDE_STDOUT = JSON.stringify({ authMethod: 'none' });
+    try {
+      const result = await runClaudeAuthStatusProbe();
+      assert.equal(result, null);
+    } finally {
+      delete process.env.FAKE_CLAUDE_STDOUT;
+    }
+  });
+});
+
+test('runClaudeAuthStatusProbe: omitting configDirectory runs without CLAUDE_CONFIG_DIR set (legacy default)', async () => {
+  await withFakeClaudeCli(async (_cliPath, logPath) => {
+    process.env.FAKE_CLAUDE_STDOUT = JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' });
+    process.env.FAKE_CLAUDE_LOG_PATH = logPath;
+    try {
+      await runClaudeAuthStatusProbe();
+      assert.equal(await readFile(logPath, 'utf8'), '');
+    } finally {
+      delete process.env.FAKE_CLAUDE_STDOUT;
+      delete process.env.FAKE_CLAUDE_LOG_PATH;
+    }
   });
 });
 

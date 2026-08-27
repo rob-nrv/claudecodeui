@@ -20,6 +20,7 @@ type UseShellConnectionOptions = {
   initialCommandRef: MutableRefObject<string | null | undefined>;
   isPlainShellRef: MutableRefObject<boolean>;
   onProcessCompleteRef: MutableRefObject<((exitCode: number) => void) | null | undefined>;
+  claudeProfileIdRef?: MutableRefObject<string | null | undefined>;
   isInitialized: boolean;
   autoConnect: boolean;
   closeSocket: () => void;
@@ -44,6 +45,7 @@ export function useShellConnection({
   initialCommandRef,
   isPlainShellRef,
   onProcessCompleteRef,
+  claudeProfileIdRef,
   isInitialized,
   autoConnect,
   closeSocket,
@@ -149,6 +151,7 @@ export function useShellConnection({
               initialCommand: initialCommandRef.current,
               isPlainShell: isPlainShellRef.current,
               forceRestart,
+              claudeProfileId: claudeProfileIdRef?.current ?? null,
             });
           }, TERMINAL_INIT_DELAY_MS);
         };
@@ -178,6 +181,7 @@ export function useShellConnection({
       }
     },
     [
+      claudeProfileIdRef,
       clearTerminalScreen,
       fitAddonRef,
       handleSocketMessage,

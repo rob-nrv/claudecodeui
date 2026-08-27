@@ -18,6 +18,8 @@ type StandaloneShellProps = {
   showHeader?: boolean;
   compact?: boolean;
   minimal?: boolean;
+  /** Opaque Claude profile id — see `ShellInitMessage.claudeProfileId`. */
+  claudeProfileId?: string | null;
 };
 
 export default function StandaloneShell({
@@ -34,6 +36,7 @@ export default function StandaloneShell({
   showHeader = true,
   compact = false,
   minimal = false,
+  claudeProfileId = null,
 }: StandaloneShellProps) {
   const [isCompleted, setIsCompleted] = useState(false);
 
@@ -70,6 +73,7 @@ export default function StandaloneShell({
           onProcessComplete={handleProcessComplete}
           minimal={minimal}
           autoConnect={minimal ? true : autoConnect}
+          claudeProfileId={claudeProfileId}
         />
       </div>
     </div>

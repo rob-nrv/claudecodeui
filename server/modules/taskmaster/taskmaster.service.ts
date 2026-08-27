@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { claudeHomeFor } from '@/modules/claude-profiles/index.js';
+
 type TaskmasterServiceDependencies = {
     readTextFile(filePath: string): Promise<string>;
     getHomeDirectory(): string;
@@ -17,7 +19,7 @@ export function createTaskmasterService(dependencies: TaskmasterServiceDependenc
             const homeDirectory = dependencies.getHomeDirectory();
             const configurationPaths = [
                 path.join(homeDirectory, '.claude.json'),
-                path.join(homeDirectory, '.claude', 'settings.json'),
+                path.join(claudeHomeFor(undefined, homeDirectory), 'settings.json'),
             ];
             let configuration: Record<string, unknown> | null = null;
             let configurationPath: string | null = null;

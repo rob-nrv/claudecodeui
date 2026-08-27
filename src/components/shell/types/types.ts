@@ -15,6 +15,13 @@ export type ShellInitMessage = {
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
   forceRestart?: boolean;
+  /**
+   * Opaque Claude profile id (never a filesystem path — the backend resolves
+   * it to a validated `CLAUDE_CONFIG_DIR` and applies it only to this one
+   * spawned process). Used by the profile-specific "Login"/"Re-login" flow
+   * in Settings → Claude Accounts; omitted everywhere else.
+   */
+  claudeProfileId?: string | null;
 };
 
 export type ShellResizeMessage = {
@@ -46,6 +53,7 @@ export type UseShellRuntimeOptions = {
   isRestarting: boolean;
   onProcessComplete?: ((exitCode: number) => void) | null;
   onOutputRef?: MutableRefObject<(() => void) | null>;
+  claudeProfileId?: string | null;
 };
 
 export type ShellSharedRefs = {

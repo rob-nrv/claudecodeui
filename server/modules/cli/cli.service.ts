@@ -81,6 +81,14 @@ function showStatus(dependencies: CliServiceDependencies): void {
   const { environment, fileSystem, output } = dependencies;
   const databasePath = environment.DATABASE_PATH || dependencies.defaultDatabasePath;
   const databaseExists = fileSystem.pathExists(databasePath);
+  // Deliberately left hard-coded rather than routed through claudeHomeFor():
+  // that resolver lives in the claude-profiles module's barrel, which
+  // transitively loads the database (better-sqlite3) and providers module
+  // graph. This is a purely cosmetic `cloudcli status` display line on the
+  // CLI's cold-start path, and pulling that weight in here measurably slowed
+  // CLI bootstrap in testing. Revisit once claude-profiles has a leaner,
+  // dependency-free entry point, or in a later lot alongside the other
+  // lower-priority sites in MULTI_ACCOUNT_SPEC.md §2.2.
   const claudeProjectsPath = path.join(dependencies.homeDirectory, '.claude', 'projects');
   const environmentFilePath = path.join(dependencies.applicationRoot, '.env');
 

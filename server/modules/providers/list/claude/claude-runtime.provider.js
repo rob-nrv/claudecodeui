@@ -14,8 +14,6 @@
 
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import os from 'os';
-import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
@@ -25,6 +23,7 @@ import {
   normalizeImageDescriptors
 } from '@/shared/image-attachments.js';
 import { CLAUDE_PREDEFINED_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
+import { claudeConfigJsonPathFor, claudeHomeFor } from '@/modules/claude-profiles/index.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import {
   createNotificationEvent,
@@ -183,13 +182,26 @@ function matchesToolPermission(entry, toolName, input) {
 }
 
 function mapCliOptionsToSDK(options = {}) {
-  const { providerSessionId, cwd, toolsSettings, permissionMode, effort, textOnly } = options;
+  const { providerSessionId, cwd, toolsSettings, permissionMode, effort, textOnly, claudeProfileId } = options;
 
   const sdkOptions = {};
 
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
+  // This object belongs to this one child process only — process.env itself
+  // is never mutated, so no other in-flight run or profile is affected.
   sdkOptions.env = { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_CEILING_MS) };
+
+  // A profile-bound run gets its own isolated CLAUDE_CONFIG_DIR so its
+  // credentials, .claude.json, and session registry never cross into another
+  // profile's (CLOUDCLI_EXTENSION_PLAN.md §4.2, MULTI_ACCOUNT_SPEC.md §3.3).
+  // Omitted entirely when no profile is bound, so single/no-profile installs
+  // spawn Claude exactly as before. Nothing in LOT 1 sets claudeProfileId yet
+  // (session-to-profile binding is LOT 3) — this is the injection point a
+  // later lot wires up, kept dormant here.
+  if (claudeProfileId) {
+    sdkOptions.env.CLAUDE_CONFIG_DIR = claudeHomeFor(claudeProfileId);
+  }
 
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
   // which does not reliably follow npm's shell wrappers like cross-spawn does.
@@ -517,7 +529,7 @@ function createHeldPromptStream(messages) {
  */
 async function loadMcpConfig(cwd) {
   try {
-    const claudeConfigPath = path.join(os.homedir(), '.claude.json');
+    const claudeConfigPath = claudeConfigJsonPathFor();
 
     // Check if config file exists
     try {

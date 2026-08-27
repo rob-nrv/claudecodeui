@@ -1,9 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 import spawn from 'cross-spawn';
 
+import {
+  claudeHomeFor,
+  runClaudeAuthStatusProbe,
+  type ClaudeAuthProbeFn,
+} from '@/modules/claude-profiles/index.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import type { IProviderAuth } from '@/shared/interfaces.js';
 import type { ProviderAuthStatus } from '@/shared/types.js';
@@ -16,11 +20,20 @@ type ClaudeCredentialsStatus = {
   error?: string;
 };
 
-const hasErrorCode = (error: unknown, code: string): boolean => (
-  error instanceof Error && 'code' in error && error.code === code
-);
-
 export class ClaudeProviderAuth implements IProviderAuth {
+  private readonly probeAuthStatus: ClaudeAuthProbeFn;
+
+  /**
+   * `dependencies.probeAuthStatus` is injectable so tests can exercise the
+   * `claude auth status` mapping (loggedIn true/false, command failure,
+   * malformed JSON) without depending on the real `claude` CLI being
+   * installed. Production code never passes it — the default always shells
+   * out for real.
+   */
+  constructor(dependencies: { probeAuthStatus?: ClaudeAuthProbeFn } = {}) {
+    this.probeAuthStatus = dependencies.probeAuthStatus ?? runClaudeAuthStatusProbe;
+  }
+
   /**
    * Checks whether the Claude Code CLI is available on this host.
    */
@@ -57,7 +70,11 @@ export class ClaudeProviderAuth implements IProviderAuth {
       installed,
       provider: 'claude',
       authenticated: credentials.authenticated,
-      email: credentials.authenticated ? credentials.email || 'Authenticated' : credentials.email,
+      // No literal 'Authenticated' fallback here: a null email means the
+      // real identity is unknown, and the caller (AccountContent.tsx)
+      // already renders a translated "authenticated user" fallback for
+      // that case. Substituting a fake identity server-side was the bug.
+      email: credentials.email,
       method: credentials.method,
       error: credentials.authenticated ? undefined : credentials.error || 'Not authenticated',
     };
@@ -68,7 +85,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
    */
   private async loadSettingsEnv(): Promise<Record<string, unknown>> {
     try {
-      const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+      const settingsPath = path.join(claudeHomeFor(), 'settings.json');
       const content = await readFile(settingsPath, 'utf8');
       const settings = readObjectRecord(JSON.parse(content));
       return readObjectRecord(settings?.env) ?? {};
@@ -79,6 +96,12 @@ export class ClaudeProviderAuth implements IProviderAuth {
 
   /**
    * Checks Claude credentials in the same priority order used by Claude Code.
+   *
+   * The env-var branches are unchanged: they are direct configuration, not
+   * an identity claim, so they never had the false-identity bug. Only the
+   * final branch — previously a hand-rolled read of `.credentials.json` that
+   * could report a confident identity that did not exist (§3 of
+   * `CLOUDCLI_EXTENSION_PLAN.md`) — is replaced, by `claude auth status`.
    */
   private async checkCredentials(): Promise<ClaudeCredentialsStatus> {
     const missingCredentialsError = 'Claude CLI is not authenticated. Run claude /login or configure ANTHROPIC_API_KEY.';
@@ -108,53 +131,30 @@ export class ClaudeProviderAuth implements IProviderAuth {
       return { authenticated: true, email: 'OAuth Token (long-lived)', method: 'environment' };
     }
 
-    try {
-      const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
-      const content = await readFile(credPath, 'utf8');
-      const creds = readObjectRecord(JSON.parse(content)) ?? {};
-      const oauth = readObjectRecord(creds.claudeAiOauth);
-      const accessToken = readOptionalString(oauth?.accessToken);
+    const probe = await this.probeAuthStatus();
 
-      if (accessToken) {
-        const expiresAt = typeof oauth?.expiresAt === 'number' ? oauth.expiresAt : undefined;
-        const email = readOptionalString(creds.email) ?? readOptionalString(creds.user) ?? null;
-        if (!expiresAt || Date.now() < expiresAt) {
-          return {
-            authenticated: true,
-            email,
-            method: 'credentials_file',
-          };
-        }
+    if (!probe) {
+      return {
+        authenticated: false,
+        email: null,
+        method: null,
+        error: 'Unable to determine Claude authentication status. Run claude /login again.',
+      };
+    }
 
-        return {
-          authenticated: false,
-          email: null,
-          method: null,
-          error: 'Claude login has expired. Run claude /login again.',
-        };
-      }
-
+    if (!probe.loggedIn) {
       return {
         authenticated: false,
         email: null,
         method: null,
         error: missingCredentialsError,
       };
-    } catch (error) {
-      let errorMessage = 'Unable to read Claude credentials. Run claude /login again.';
-
-      if (hasErrorCode(error, 'ENOENT')) {
-        errorMessage = missingCredentialsError;
-      } else if (error instanceof SyntaxError) {
-        errorMessage = 'Claude credentials are unreadable. Run claude /login again.';
-      }
-
-      return {
-        authenticated: false,
-        email: null,
-        method: null,
-        error: errorMessage,
-      };
     }
+
+    return {
+      authenticated: true,
+      email: probe.email,
+      method: 'cli_probe',
+    };
   }
 }

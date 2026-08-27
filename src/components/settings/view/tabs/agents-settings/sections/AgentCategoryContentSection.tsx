@@ -5,6 +5,7 @@ import type { SkillsProject } from '../../../../../skills/types';
 import { ProviderSkills } from '../../../../../skills';
 
 import AccountContent from './content/AccountContent';
+import ClaudeAccountsSection from './content/ClaudeAccountsSection';
 import PermissionsContent from './content/PermissionsContent';
 
 export default function AgentCategoryContentSection({
@@ -22,11 +23,14 @@ export default function AgentCategoryContentSection({
   return (
     <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-4">
       {selectedCategory === 'account' && (
-        <AccountContent
-          agent={selectedAgent}
-          authStatus={agentContextById[selectedAgent].authStatus}
-          onLogin={agentContextById[selectedAgent].onLogin}
-        />
+        <>
+          <AccountContent
+            agent={selectedAgent}
+            authStatus={agentContextById[selectedAgent].authStatus}
+            onLogin={agentContextById[selectedAgent].onLogin}
+          />
+          {selectedAgent === 'claude' && <ClaudeAccountsSection agent={selectedAgent} />}
+        </>
       )}
 
       {selectedCategory === 'permissions' && selectedAgent === 'claude' && (

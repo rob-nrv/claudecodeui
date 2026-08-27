@@ -364,6 +364,34 @@
     },
     "error": "Error: {{error}}"
   },
+  "claudeProfiles": {
+    "title": "Claude Accounts",
+    "description": "Run more than one Claude account side by side. Each one signs in separately — creating an account here does not reuse the login above.",
+    "default": "Default",
+    "identityNotVerified": "Identity not verified",
+    "newAccountPlaceholder": "Account name (e.g. Work)",
+    "addedConfirmation": "✓ {{name}} added",
+    "connectionState": {
+      "connected": "Connected",
+      "expired": "Expired",
+      "not_authenticated": "Not connected",
+      "unknown": "Not connected"
+    },
+    "actions": {
+      "addAccount": "+ Add account",
+      "save": "Save",
+      "saving": "Saving...",
+      "cancel": "Cancel",
+      "login": "Login",
+      "relogin": "Re-login",
+      "rename": "Rename",
+      "setDefault": "Set default",
+      "verify": "Verify identity",
+      "verifying": "Verifying...",
+      "remove": "Remove",
+      "confirmRemove": "Confirm remove"
+    }
+  },
   "permissions": {
     "title": "Permission Settings",
     "skipPermissions": {

@@ -19,6 +19,8 @@ type ShellIncomingMessage = {
   initialCommand?: string;
   isPlainShell?: boolean;
   forceRestart?: boolean;
+  /** Opaque Claude profile id — see `resolveClaudeProfileConfigDir` below. */
+  claudeProfileId?: string;
 };
 
 type PtySessionEntry = {
@@ -105,6 +107,14 @@ type ShellWebSocketDependencies = {
     sessionId: string,
     provider: string,
   ) => string | null | undefined;
+  /**
+   * Resolves an opaque Claude profile id to its validated, isolated config
+   * directory (the value stored on the `claude_profiles` row — never
+   * recomputed from a client-supplied path). Returns `null`/`undefined` for
+   * an unknown id, which the `init` handler treats as a hard rejection: no
+   * pty is spawned. Absent entirely on installs that haven't wired this up.
+   */
+  resolveClaudeProfileConfigDir?: (profileId: string) => string | null | undefined;
   spawnPty?: typeof pty.spawn;
 };
 
@@ -315,6 +325,7 @@ export function handleShellConnection(
           readBoolean(data.isPlainShell) ||
           (!!initialCommand && !hasSession) ||
           provider === 'plain-shell';
+        const claudeProfileId = readString(data.claudeProfileId) || null;
 
         urlDetectionBuffer = '';
         announcedAuthUrls.clear();
@@ -323,13 +334,19 @@ export function handleShellConnection(
           !!initialCommand &&
           (initialCommand.includes('setup-token') ||
             initialCommand.includes('cursor-agent login') ||
-            initialCommand.includes('auth login'));
+            initialCommand.includes('auth login') ||
+            initialCommand.includes('claude /login'));
 
         const commandSuffix =
           isPlainShell && initialCommand
             ? `_cmd_${Buffer.from(initialCommand).toString('base64').slice(0, 16)}`
             : '';
-        ptySessionKey = `${projectPath}_${sessionId ?? 'default'}${commandSuffix}`;
+        // Two different Claude profiles logging in at once must never share a
+        // pty: without this, "Work" and "Personal" login (same synthetic
+        // project path, same sessionId, same `claude /login` command) would
+        // collide on the same session key and reuse each other's process.
+        const profileSuffix = claudeProfileId ? `_profile_${claudeProfileId}` : '';
+        ptySessionKey = `${projectPath}_${sessionId ?? 'default'}${commandSuffix}${profileSuffix}`;
 
         if (isLoginCommand || forceRestart) {
           const oldSession = ptySessionsMap.get(ptySessionKey);
@@ -390,6 +407,26 @@ export function handleShellConnection(
           return;
         }
 
+        // The client sends only an opaque profile id, never a path: this is
+        // the sole place a filesystem CLAUDE_CONFIG_DIR is resolved, from the
+        // profile's own stored (and previously validated) configDirectory —
+        // never recomputed from client input. An id that doesn't resolve to
+        // a real profile is rejected outright; no pty is spawned for it.
+        let claudeProfileConfigDir: string | null = null;
+        if (claudeProfileId) {
+          try {
+            claudeProfileConfigDir = dependencies.resolveClaudeProfileConfigDir?.(claudeProfileId) ?? null;
+          } catch (error) {
+            console.error('[ERROR] Failed to resolve Claude profile config directory:', error);
+            claudeProfileConfigDir = null;
+          }
+
+          if (!claudeProfileConfigDir) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Unknown Claude profile.' }));
+            return;
+          }
+        }
+
         const shellCommand = buildShellCommand(data, dependencies);
         const resumeSessionId = resolveResumeSessionId(data, dependencies);
         const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
@@ -410,6 +447,11 @@ export function handleShellConnection(
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
             FORCE_COLOR: '3',
+            // Scoped to this one pty's env object only — process.env itself
+            // is never assigned to, so no other session (including this same
+            // profile's own already-running sessions, or another profile's)
+            // is ever affected.
+            ...(claudeProfileConfigDir ? { CLAUDE_CONFIG_DIR: claudeProfileConfigDir } : {}),
           },
         });
 

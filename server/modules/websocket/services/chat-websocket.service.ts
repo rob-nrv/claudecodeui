@@ -229,6 +229,11 @@ async function handleChatSend(
     sessionId,
     cwd: clientOptions.cwd ?? session.project_path ?? undefined,
     projectPath: session.project_path ?? clientOptions.projectPath,
+    // Claude profile binding will be resolved from the session row, never
+    // from the client (CLOUDCLI_EXTENSION_PLAN.md F5, LOT 3) — sessions have
+    // no profile column yet, so a client-supplied value is deliberately
+    // never forwarded to the runtime.
+    claudeProfileId: undefined,
   };
 
   try {
