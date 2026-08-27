@@ -94,6 +94,7 @@
     "createProjectMobile": "Tap the menu button above to access projects",
     "createProjectDesktop": "Create a new project by clicking the folder icon in the sidebar",
     "newSession": "New Session",
+    "claudeAccountUnavailable": "Unknown account",
     "untitledSession": "Untitled Session",
     "projectFiles": "Project Files"
   },

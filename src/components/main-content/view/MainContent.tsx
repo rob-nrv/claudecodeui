@@ -196,6 +196,7 @@ function MainContent({
                 session={selectedSession}
                 showHeader={false}
                 isActive={activeTab === 'shell'}
+                claudeProfileId={selectedSession?.claudeProfileId ?? null}
               />
             </div>
           )}

@@ -100,6 +100,15 @@ export function useShellConnection({
         return;
       }
 
+      // Surfaces backend init rejections (e.g. a session bound to a Claude
+      // profile that no longer exists — CLAUDE_PROFILE_UNAVAILABLE) directly
+      // in the terminal. No pty is spawned for these, so without this the
+      // terminal would just sit blank with no explanation.
+      if (message.type === 'error') {
+        const errorText = typeof message.message === 'string' ? message.message : 'Shell connection error.';
+        terminalRef.current?.write(`\r\n\x1b[31m[${errorText}]\x1b[0m\r\n`);
+        return;
+      }
     },
     [handleProcessCompletion, onOutputRef, terminalRef],
   );

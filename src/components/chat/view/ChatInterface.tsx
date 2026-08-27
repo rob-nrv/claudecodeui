@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
@@ -11,6 +11,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -91,6 +92,39 @@ function ChatInterface({
     selectedSession,
     selectedProject,
   });
+
+  // Claude account for the NEXT brand-new session in this project. Once a
+  // session exists, its binding lives on the session row (`selectedSession`),
+  // never here — this only feeds the one-time session-creation POST
+  // (CLOUDCLI_EXTENSION_PLAN.md F4/F5). Re-fetched independently of Settings'
+  // own profile list so this view has no dependency on Settings being open.
+  const { profiles: claudeProfiles } = useClaudeProfiles();
+  const [selectedClaudeProfileId, setSelectedClaudeProfileId] = useState<string | null>(null);
+
+  // Tapping "+ New Session" bumps `newSessionTrigger`; treat that as the
+  // signal to drop any account chosen for a previous pending session and
+  // fall back to the account marked Default again.
+  useEffect(() => {
+    setSelectedClaudeProfileId(null);
+  }, [newSessionTrigger]);
+
+  const defaultClaudeProfileId = useMemo(
+    () => claudeProfiles.find((profile) => profile.isDefault)?.id ?? claudeProfiles[0]?.id ?? null,
+    [claudeProfiles],
+  );
+
+  // 0 profiles: legacy behaviour, nothing sent (undefined below flows into
+  // the resolver as "use ~/.claude"). 1 profile: silently bound, no picker.
+  // 2+: the picker's choice, defaulting to whichever profile is Default.
+  const resolvedClaudeProfileId = useMemo(() => {
+    if (provider !== 'claude' || claudeProfiles.length === 0) {
+      return null;
+    }
+    if (claudeProfiles.length === 1) {
+      return claudeProfiles[0].id;
+    }
+    return selectedClaudeProfileId ?? defaultClaudeProfileId;
+  }, [provider, claudeProfiles, selectedClaudeProfileId, defaultClaudeProfileId]);
 
   const {
     chatMessages,
@@ -200,6 +234,7 @@ function ChatInterface({
     selectedSession,
     currentSessionId,
     provider,
+    claudeProfileId: resolvedClaudeProfileId,
     permissionMode,
     cyclePermissionMode,
     currentProviderModel,
@@ -350,6 +385,9 @@ function ChatInterface({
           chatMessages={chatMessages}
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
+          claudeProfiles={claudeProfiles}
+          selectedClaudeProfileId={resolvedClaudeProfileId}
+          onSelectClaudeProfile={setSelectedClaudeProfileId}
           provider={provider}
           setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
           textareaRef={textareaRef}

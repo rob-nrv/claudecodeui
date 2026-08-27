@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { claudeProfilesDb, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type {
@@ -18,6 +18,7 @@ type CreateAppSessionResult = {
   provider: LLMProvider;
   projectPath: string;
   sessionName: string;
+  claudeProfileId: string | null;
 };
 
 type ArchivedSessionListItem = {
@@ -53,6 +54,8 @@ type SessionDetails = {
   updatedAt: string | null;
   lastActivity: string | null;
   isArchived: boolean;
+  /** The Claude account this session is permanently bound to, or null (non-Claude / pre-LOT-2 sessions). */
+  claudeProfileId: string | null;
   project: {
     projectId: string;
     path: string;
@@ -210,11 +213,18 @@ export const sessionsService = {
    * this row later, when the provider runtime announces it mid-run. Its title
    * comes directly from the first visible CloudCLI message and is limited to
    * four whole words before any provider-owned storage exists.
+   *
+   * `claudeProfileId` (client-supplied, opaque) is resolved and validated
+   * once, right here, and never again: a request for a non-Claude provider or
+   * for an id that does not exist in `claude_profiles` never reaches the
+   * database (`CLOUDCLI_EXTENSION_PLAN.md` F4/F5). Once persisted, this is
+   * the session's permanent binding — nothing later re-resolves it.
    */
   createAppSession(
     provider: LLMProvider,
     projectPath: string,
     initialMessage: string,
+    claudeProfileId?: string | null,
   ): CreateAppSessionResult {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
@@ -224,15 +234,28 @@ export const sessionsService = {
       });
     }
 
+    let resolvedClaudeProfileId: string | null = null;
+    if (provider === 'claude' && typeof claudeProfileId === 'string' && claudeProfileId.trim()) {
+      const trimmedProfileId = claudeProfileId.trim();
+      if (!claudeProfilesDb.getById(trimmedProfileId)) {
+        throw new AppError('Claude profile not found.', {
+          code: 'CLAUDE_PROFILE_NOT_FOUND',
+          statusCode: 404,
+        });
+      }
+      resolvedClaudeProfileId = trimmedProfileId;
+    }
+
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName);
+    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName, resolvedClaudeProfileId);
 
     return {
       sessionId,
       provider,
       projectPath: normalizedProjectPath,
       sessionName,
+      claudeProfileId: resolvedClaudeProfileId,
     };
   },
 
@@ -339,6 +362,7 @@ export const sessionsService = {
       updatedAt: session.updated_at ?? null,
       lastActivity: session.updated_at ?? session.created_at ?? null,
       isArchived: Boolean(session.isArchived),
+      claudeProfileId: session.claude_profile_id ?? null,
       project: project && projectPath
         ? {
             projectId: project.project_id,

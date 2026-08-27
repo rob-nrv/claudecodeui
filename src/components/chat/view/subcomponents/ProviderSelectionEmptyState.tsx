@@ -9,6 +9,7 @@ import type {
   ProviderModelOption,
   ProviderModelsDefinition,
 } from "../../../../types/app";
+import type { ClaudeProfile } from "../../../settings/hooks/useClaudeProfiles.types";
 import LLMProviderLogo from "../../../llm-provider-logo/LLMProviderLogo";
 import { NextTaskBanner } from "../../../task-master";
 import {
@@ -55,6 +56,10 @@ type ProviderSelectionEmptyStateProps = {
   currentSessionId: string | null;
   provider: LLMProvider;
   setProvider: (next: LLMProvider) => void;
+  /** Claude accounts available for a brand-new session; empty for single/no-profile installs. */
+  claudeProfiles: ClaudeProfile[];
+  selectedClaudeProfileId: string | null;
+  onSelectClaudeProfile: (profileId: string) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;
@@ -113,6 +118,9 @@ export default function ProviderSelectionEmptyState({
   currentSessionId,
   provider,
   setProvider,
+  claudeProfiles,
+  selectedClaudeProfileId,
+  onSelectClaudeProfile,
   textareaRef,
   claudeModel,
   setClaudeModel,
@@ -365,6 +373,37 @@ export default function ProviderSelectionEmptyState({
               />
             </DialogContent>
           </Dialog>
+
+          {provider === "claude" && claudeProfiles.length >= 2 && (
+            <div
+              role="group"
+              aria-label={t("providerSelection.claudeAccount", { defaultValue: "Claude account" })}
+              className="mx-auto mt-3 flex max-w-xs flex-wrap items-center justify-center gap-1.5"
+            >
+              <span className="text-[11px] text-muted-foreground">
+                {t("providerSelection.claudeAccount", { defaultValue: "Claude account" })}:
+              </span>
+              {claudeProfiles.map((claudeProfile) => {
+                const isSelected = claudeProfile.id === selectedClaudeProfileId;
+                return (
+                  <button
+                    key={claudeProfile.id}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectClaudeProfile(claudeProfile.id)}
+                    className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                      isSelected
+                        ? "border-primary/60 bg-primary/10 text-primary"
+                        : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground"
+                    }`}
+                  >
+                    {isSelected && <Check className="h-3 w-3" />}
+                    {claudeProfile.displayName}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <p className="mt-4 text-center text-sm text-muted-foreground/70">
             {

@@ -115,6 +115,16 @@ type ShellWebSocketDependencies = {
    * pty is spawned. Absent entirely on installs that haven't wired this up.
    */
   resolveClaudeProfileConfigDir?: (profileId: string) => string | null | undefined;
+  /**
+   * Resolves the Claude profile id permanently bound to an app session
+   * (`sessions.claude_profile_id`), independent of anything the client sent.
+   * When a `sessionId` is present on `init`, this is the sole source of
+   * truth for that connection's `claudeProfileId` — see the comment at its
+   * call site. Returns `null`/`undefined` for a legacy/unbound/non-Claude
+   * session, which spawns exactly as before (no `CLAUDE_CONFIG_DIR`
+   * override). Absent entirely on installs that haven't wired this up.
+   */
+  resolveSessionClaudeProfileId?: (sessionId: string) => string | null | undefined;
   spawnPty?: typeof pty.spawn;
 };
 
@@ -325,7 +335,19 @@ export function handleShellConnection(
           readBoolean(data.isPlainShell) ||
           (!!initialCommand && !hasSession) ||
           provider === 'plain-shell';
-        const claudeProfileId = readString(data.claudeProfileId) || null;
+        // A Shell opened FOR a session must use that session's own Claude
+        // binding, never whatever the client happened to send — the client
+        // is not trusted here for the same reason chat.send never trusts a
+        // client-supplied claudeProfileId (CLOUDCLI_EXTENSION_PLAN.md F5).
+        // `resolveSessionClaudeProfileId` reads the session row directly, so
+        // this overrides the client value outright once a real sessionId is
+        // present. Session-less shells (the login/verify modal, the plain
+        // generic terminal) have no session row to resolve against, so they
+        // keep trusting the client-supplied id exactly as LOT 1 shipped it.
+        const claudeProfileId =
+          sessionId && dependencies.resolveSessionClaudeProfileId
+            ? dependencies.resolveSessionClaudeProfileId(sessionId) ?? null
+            : readString(data.claudeProfileId) || null;
 
         urlDetectionBuffer = '';
         announcedAuthUrls.clear();

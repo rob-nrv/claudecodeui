@@ -150,6 +150,7 @@
     "title": "Choose Your AI Assistant",
     "description": "Select a provider to start a new conversation",
     "selectModel": "Select Model",
+    "claudeAccount": "Claude account",
     "providerInfo": {
       "anthropic": "by Anthropic",
       "openai": "by OpenAI",

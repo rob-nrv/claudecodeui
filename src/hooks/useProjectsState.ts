@@ -50,6 +50,7 @@ type RegisterOptimisticSessionArgs = {
   provider: LLMProvider;
   project: Project;
   summary?: string | null;
+  claudeProfileId?: string | null;
 };
 
 /**
@@ -71,6 +72,7 @@ type SessionDetailsApiPayload = {
       displayName?: string;
       isStarred?: boolean;
     } | null;
+    claudeProfileId?: string | null;
   };
 };
 
@@ -523,6 +525,7 @@ export function useProjectsState({
     provider,
     project,
     summary,
+    claudeProfileId,
   }: RegisterOptimisticSessionArgs) => {
     if (!newSessionId || !project?.projectId) {
       return;
@@ -539,6 +542,7 @@ export function useProjectsState({
       lastActivity: now,
       __provider: provider,
       __projectId: project.projectId,
+      claudeProfileId: claudeProfileId ?? null,
     };
     const upsert: SessionUpsertedEvent = {
       kind: 'session_upserted',
@@ -937,6 +941,7 @@ export function useProjectsState({
             ? (details.provider as LLMProvider)
             : readSelectedProvider(),
         __projectId: resolvedProjectId,
+        claudeProfileId: details.claudeProfileId ?? null,
       };
 
       setSelectedSession((previousSession) =>

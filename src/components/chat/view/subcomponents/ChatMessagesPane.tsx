@@ -12,6 +12,7 @@ import type {
 } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
+import type { ClaudeProfile } from '../../../settings/hooks/useClaudeProfiles.types';
 
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
@@ -33,6 +34,10 @@ interface ChatMessagesPaneProps {
   currentSessionId: string | null;
   provider: LLMProvider;
   setProvider: (provider: LLMProvider) => void;
+  /** Claude accounts available for a brand-new session; empty for single/no-profile installs. */
+  claudeProfiles: ClaudeProfile[];
+  selectedClaudeProfileId: string | null;
+  onSelectClaudeProfile: (profileId: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;
@@ -82,6 +87,9 @@ function ChatMessagesPane({
   currentSessionId,
   provider,
   setProvider,
+  claudeProfiles,
+  selectedClaudeProfileId,
+  onSelectClaudeProfile,
   textareaRef,
   claudeModel,
   setClaudeModel,
@@ -189,6 +197,9 @@ function ChatMessagesPane({
           currentSessionId={currentSessionId}
           provider={provider}
           setProvider={setProvider}
+          claudeProfiles={claudeProfiles}
+          selectedClaudeProfileId={selectedClaudeProfileId}
+          onSelectClaudeProfile={onSelectClaudeProfile}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}

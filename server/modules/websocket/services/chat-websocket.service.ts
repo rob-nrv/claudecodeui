@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
-import { sessionsDb } from '@/modules/database/index.js';
+import { claudeProfilesDb, sessionsDb } from '@/modules/database/index.js';
 import { providerModelsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
@@ -172,6 +172,25 @@ async function handleChatSend(
     return;
   }
 
+  // The Claude account this session is bound to is read from the session
+  // row only, never from the client (CLOUDCLI_EXTENSION_PLAN.md F5). A bound
+  // session whose profile has since been removed must halt here rather than
+  // silently falling back to the legacy/default account — that would risk
+  // running a Work session under a Personal account or vice versa.
+  let claudeProfileId: string | null = null;
+  if (session.claude_profile_id) {
+    if (!claudeProfilesDb.getById(session.claude_profile_id)) {
+      sendProtocolError(
+        ws,
+        'CLAUDE_PROFILE_UNAVAILABLE',
+        'The Claude account this session is bound to is no longer available.',
+        sessionId
+      );
+      return;
+    }
+    claudeProfileId = session.claude_profile_id;
+  }
+
   const run = chatRunRegistry.startRun({
     appSessionId: sessionId,
     provider,
@@ -229,11 +248,9 @@ async function handleChatSend(
     sessionId,
     cwd: clientOptions.cwd ?? session.project_path ?? undefined,
     projectPath: session.project_path ?? clientOptions.projectPath,
-    // Claude profile binding will be resolved from the session row, never
-    // from the client (CLOUDCLI_EXTENSION_PLAN.md F5, LOT 3) — sessions have
-    // no profile column yet, so a client-supplied value is deliberately
-    // never forwarded to the runtime.
-    claudeProfileId: undefined,
+    // Resolved above from the session row only; a client-supplied
+    // `options.claudeProfileId` is never forwarded (CLOUDCLI_EXTENSION_PLAN.md F5).
+    claudeProfileId: claudeProfileId ?? undefined,
   };
 
   try {

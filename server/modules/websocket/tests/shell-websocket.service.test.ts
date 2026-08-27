@@ -247,6 +247,317 @@ test('a resolver dependency that is entirely absent (older composition) does not
 });
 
 // ---------------------------------------------------------------------------
+// Pixel regression: a Shell opened FOR an existing Claude session must use
+// THAT session's bound profile, never a client-supplied value, the current
+// Default, or the legacy/global account. The bug: `MainContent.tsx`'s
+// workspace Shell tab never passed `claudeProfileId` at all, so every
+// session's Shell silently spawned against the un-isolated legacy
+// `~/.claude` — which happened to be authenticated as "Work", making a
+// Personal session's Shell report the Work identity via `claude /status`.
+// The fix makes `sessionId` (already sent on every session-bound `init`)
+// resolve the profile server-side via `resolveSessionClaudeProfileId`,
+// overriding anything the client sends once a real session is involved.
+// ---------------------------------------------------------------------------
+
+function sessionShellInitMessage(overrides: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    type: 'init',
+    projectPath: process.cwd(),
+    hasSession: true,
+    provider: 'claude',
+    isPlainShell: false,
+    ...overrides,
+  });
+}
+
+// The pty session map this service keeps is module-level and outlives any
+// one test, so every test below mints its own unique session/profile ids —
+// reusing a literal like "session-work" across tests would silently hit the
+// "reconnect to existing session" path instead of spawning, exactly like a
+// real reconnect would (see test E, which relies on that same behavior on
+// purpose for a single test).
+let uniqueIdCounter = 0;
+function uniqueId(label: string): string {
+  uniqueIdCounter += 1;
+  return `${label}-${uniqueIdCounter}`;
+}
+
+test('A: a Shell opened for a session bound to "work" gets the Work CLAUDE_CONFIG_DIR', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-work');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) =>
+      (profileId === 'profile-work' ? '/home/user/.cloudcli/claude-profiles/profile-work' : null),
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-work' : null),
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  socket.emit('message', sessionShellInitMessage({ sessionId }));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-work');
+});
+
+test('B: a Shell opened for a session bound to "personal" gets the Personal CLAUDE_CONFIG_DIR', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-personal');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) =>
+      (profileId === 'profile-personal' ? '/home/user/.cloudcli/claude-profiles/profile-personal' : null),
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-personal' : null),
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  socket.emit('message', sessionShellInitMessage({ sessionId }));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-personal');
+});
+
+test('C: Work and Personal session shells get distinct ptys with no cross-contamination', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const workSessionId = uniqueId('session-work');
+  const personalSessionId = uniqueId('session-personal');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) => {
+      if (profileId === 'profile-work') return '/home/user/.cloudcli/claude-profiles/profile-work';
+      if (profileId === 'profile-personal') return '/home/user/.cloudcli/claude-profiles/profile-personal';
+      return null;
+    },
+    resolveSessionClaudeProfileId: (id: string) => {
+      if (id === workSessionId) return 'profile-work';
+      if (id === personalSessionId) return 'profile-personal';
+      return null;
+    },
+    spawnPty,
+  };
+
+  const workSocket = createFakeSocket();
+  handleShellConnection(workSocket as never, dependencies);
+  workSocket.emit('message', sessionShellInitMessage({ sessionId: workSessionId }));
+
+  const personalSocket = createFakeSocket();
+  handleShellConnection(personalSocket as never, dependencies);
+  personalSocket.emit('message', sessionShellInitMessage({ sessionId: personalSessionId }));
+
+  assert.equal(calls.length, 2, 'each session must spawn its own pty');
+  assert.equal(calls[0].options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-work');
+  assert.equal(calls[1].options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-personal');
+  assert.notEqual(calls[0].options.env?.CLAUDE_CONFIG_DIR, calls[1].options.env?.CLAUDE_CONFIG_DIR);
+});
+
+test('D: changing the global Default profile after creation does not affect an existing session\'s Shell binding', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-work');
+  // `resolveSessionClaudeProfileId` is a pure function of sessionId only — it
+  // has no notion of "current default" to consult, which is the point: the
+  // binding lives on the session row, not in any global/current-selection state.
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) =>
+      (profileId === 'profile-work' ? '/home/user/.cloudcli/claude-profiles/profile-work' : null),
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-work' : null),
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  // Simulates the Default profile having changed to "personal" elsewhere in
+  // the app in between — irrelevant, since resolution never reads it.
+  socket.emit('message', sessionShellInitMessage({ sessionId }));
+
+  assert.equal(calls[0].options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-work');
+});
+
+test('E: reconnect/resume (a second init for the same session) resolves the identical profile binding', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-work');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) =>
+      (profileId === 'profile-work' ? '/home/user/.cloudcli/claude-profiles/profile-work' : null),
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-work' : null),
+    spawnPty,
+  };
+
+  const firstSocket = createFakeSocket();
+  handleShellConnection(firstSocket as never, dependencies);
+  firstSocket.emit('message', sessionShellInitMessage({ sessionId, forceRestart: true }));
+
+  const secondSocket = createFakeSocket();
+  handleShellConnection(secondSocket as never, dependencies);
+  secondSocket.emit('message', sessionShellInitMessage({ sessionId, forceRestart: true }));
+
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-work');
+  }
+});
+
+test('F: a legacy session with no bound profile spawns its Shell exactly as before (no CLAUDE_CONFIG_DIR)', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-legacy');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: () => {
+      throw new Error('must not be called: nothing is bound');
+    },
+    resolveSessionClaudeProfileId: () => null, // legacy session row: claude_profile_id is NULL
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  socket.emit('message', sessionShellInitMessage({ sessionId }));
+
+  assert.equal(calls.length, 1);
+  assert.equal('CLAUDE_CONFIG_DIR' in (calls[0].options.env ?? {}), false);
+});
+
+test('G: a session bound to a since-deleted profile gets a clean error and spawns zero ptys — no fallback', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-orphaned');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: () => null, // the profile row is gone
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-removed' : null),
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  socket.emit('message', sessionShellInitMessage({ sessionId }));
+
+  assert.equal(calls.length, 0, 'no pty may be spawned for an orphaned profile binding');
+  const frames = socket.frames.map((frame) => JSON.parse(frame) as Record<string, unknown>);
+  assert.ok(frames.some((frame) => frame.type === 'error'));
+});
+
+test('H: a non-Claude session (e.g. Codex) is unaffected — no profile lookup drives its Shell', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-codex');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: () => {
+      throw new Error('must not be called for a non-Claude session');
+    },
+    // A non-Claude session row never has claude_profile_id set.
+    resolveSessionClaudeProfileId: () => null,
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  socket.emit('message', sessionShellInitMessage({ sessionId, provider: 'codex' }));
+
+  assert.equal(calls.length, 1);
+  assert.equal('CLAUDE_CONFIG_DIR' in (calls[0].options.env ?? {}), false);
+});
+
+test('I: a client-supplied claudeProfileId is ignored for a session-bound Shell — the session row always wins', () => {
+  const { spawnPty, calls } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-personal');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) => {
+      if (profileId === 'profile-personal') return '/home/user/.cloudcli/claude-profiles/profile-personal';
+      if (profileId === 'attacker-supplied') return '/home/user/.cloudcli/claude-profiles/attacker-supplied';
+      return null;
+    },
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-personal' : null),
+    spawnPty,
+  };
+
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  // A stale/buggy/malicious client claims a different profile than the one
+  // actually bound to this session; the backend must not honour it.
+  socket.emit('message', sessionShellInitMessage({ sessionId, claudeProfileId: 'attacker-supplied' }));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env?.CLAUDE_CONFIG_DIR, '/home/user/.cloudcli/claude-profiles/profile-personal');
+});
+
+test('J: resolving a session-bound profile never touches the global process.env', () => {
+  const { spawnPty } = createRecordingSpawnPty();
+  const sessionId = uniqueId('session-work');
+  const dependencies = {
+    resolveProviderSessionId: () => null,
+    resolveClaudeProfileConfigDir: (profileId: string) =>
+      (profileId === 'profile-work' ? '/home/user/.cloudcli/claude-profiles/profile-work' : null),
+    resolveSessionClaudeProfileId: (id: string) => (id === sessionId ? 'profile-work' : null),
+    spawnPty,
+  };
+
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  socket.emit('message', sessionShellInitMessage({ sessionId }));
+
+  assert.equal(process.env.CLAUDE_CONFIG_DIR, originalConfigDir);
+});
+
+test('REAL child process: two sessions bound to different profiles get their own CLAUDE_CONFIG_DIR through the real OS process (no spawnPty mock)', async () => {
+  const tempWork = await mkdtemp(path.join(os.tmpdir(), 'cc-real-session-work-'));
+  const tempPersonal = await mkdtemp(path.join(os.tmpdir(), 'cc-real-session-personal-'));
+  const workSessionId = uniqueId('real-session-work');
+  const personalSessionId = uniqueId('real-session-personal');
+  try {
+    const dependencies = {
+      resolveProviderSessionId: () => null,
+      resolveClaudeProfileConfigDir: (profileId: string) => {
+        if (profileId === 'profile-work') return tempWork;
+        if (profileId === 'profile-personal') return tempPersonal;
+        return null;
+      },
+      resolveSessionClaudeProfileId: (id: string) => {
+        if (id === workSessionId) return 'profile-work';
+        if (id === personalSessionId) return 'profile-personal';
+        return null;
+      },
+      // spawnPty deliberately NOT provided: falls through to the real pty.spawn.
+    };
+
+    const workSocket = createFakeSocket();
+    handleShellConnection(workSocket as never, dependencies);
+    workSocket.emit(
+      'message',
+      sessionShellInitMessage({
+        sessionId: workSessionId,
+        isPlainShell: true,
+        initialCommand: 'echo "CLAUDE_CONFIG_DIR_PROBE=$CLAUDE_CONFIG_DIR"',
+      }),
+    );
+    await waitFor(() => collectOutput(workSocket).includes('CLAUDE_CONFIG_DIR_PROBE='));
+
+    const personalSocket = createFakeSocket();
+    handleShellConnection(personalSocket as never, dependencies);
+    personalSocket.emit(
+      'message',
+      sessionShellInitMessage({
+        sessionId: personalSessionId,
+        isPlainShell: true,
+        initialCommand: 'echo "CLAUDE_CONFIG_DIR_PROBE=$CLAUDE_CONFIG_DIR"',
+      }),
+    );
+    await waitFor(() => collectOutput(personalSocket).includes('CLAUDE_CONFIG_DIR_PROBE='));
+
+    assert.ok(collectOutput(workSocket).includes(`CLAUDE_CONFIG_DIR_PROBE=${tempWork}`));
+    assert.ok(collectOutput(personalSocket).includes(`CLAUDE_CONFIG_DIR_PROBE=${tempPersonal}`));
+  } finally {
+    await rm(tempWork, { recursive: true, force: true });
+    await rm(tempPersonal, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // REAL (non-mocked) integration tests.
 //
 // A Pixel test found that a real `Work → Login` wrote into the real, global

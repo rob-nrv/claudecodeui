@@ -8,7 +8,7 @@ import test from 'node:test';
 
 import express, { type NextFunction, type Request, type Response } from 'express';
 
-import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
+import { claudeProfilesDb, closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import providerRouter from '@/modules/providers/provider.routes.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -75,6 +75,52 @@ test('session creation route names a CloudCLI session from the initial message',
       sessionsDb.getSessionById(payload.data.sessionId)?.custom_name,
       'abcd efg hij klm',
     );
+  });
+});
+
+test('session creation route binds a Claude session to a claudeProfileId', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    claudeProfilesDb.create({
+      id: 'route-profile-work',
+      displayName: 'Work',
+      configDirectory: '/tmp/route-profile-work',
+      isDefault: true,
+    });
+
+    const response = await fetch(`${baseUrl}/api/providers/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'claude',
+        projectPath: workspacePath,
+        initialMessage: 'hello',
+        claudeProfileId: 'route-profile-work',
+      }),
+    });
+    const payload = await response.json() as { data: { sessionId: string; claudeProfileId: string | null } };
+
+    assert.equal(response.status, 201);
+    assert.equal(payload.data.claudeProfileId, 'route-profile-work');
+    assert.equal(sessionsDb.getSessionById(payload.data.sessionId)?.claude_profile_id, 'route-profile-work');
+  });
+});
+
+test('session creation route rejects an unknown claudeProfileId', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    const response = await fetch(`${baseUrl}/api/providers/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'claude',
+        projectPath: workspacePath,
+        initialMessage: 'hello',
+        claudeProfileId: 'no-such-profile',
+      }),
+    });
+    const payload = await response.json() as { error: { code: string } };
+
+    assert.equal(response.status, 404);
+    assert.equal(payload.error.code, 'CLAUDE_PROFILE_NOT_FOUND');
   });
 });
 

@@ -13,6 +13,13 @@ type SessionRow = {
   model: string | null;
   /** Reasoning effort this session runs with; NULL until the app records one. */
   effort: string | null;
+  /**
+   * The Claude account this session is permanently bound to, or NULL for
+   * non-Claude sessions and every session created before LOT 2. Set once at
+   * creation (`createAppSession`) and never updated afterwards — resume must
+   * always read the same value it was created with.
+   */
+  claude_profile_id: string | null;
   isArchived: number;
   created_at: string;
   updated_at: string;
@@ -24,7 +31,7 @@ type RecentSessionsPage = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, claude_profile_id, isArchived, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -169,12 +176,19 @@ export const sessionsDb = {
    * stays NULL until the provider runtime announces its own id and
    * `assignProviderSessionId` records the mapping. `customName` is derived
    * from the first visible CloudCLI message by the sessions service.
+   *
+   * `claudeProfileId` is resolved once by the caller (`sessionsService`,
+   * which validates it against `claude_profiles` before this insert) and
+   * written here as the session's permanent binding. There is no setter for
+   * this column afterwards — resume and every future `chat.send` for this
+   * session always read it back from this row, never from client input.
    */
   createAppSession(
     sessionId: string,
     provider: string,
     projectPath: string,
     customName?: string,
+    claudeProfileId?: string | null,
   ): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
@@ -182,9 +196,9 @@ export const sessionsDb = {
     projectsDb.createProjectPath(normalizedProjectPath);
 
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, customName ?? null, normalizedProjectPath);
+      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, claude_profile_id, isArchived, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, NULL, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run(sessionId, provider, customName ?? null, normalizedProjectPath, claudeProfileId ?? null);
 
     return sessionId;
   },

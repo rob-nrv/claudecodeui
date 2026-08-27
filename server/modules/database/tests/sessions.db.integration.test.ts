@@ -84,6 +84,16 @@ test('repository reads normalize SQLite UTC timestamps to ISO strings', async ()
   });
 });
 
+test('createAppSession persists claude_profile_id and leaves it out of the row when omitted', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('session-bound', 'claude', '/workspace/demo-project', 'Bound', 'profile-work');
+    sessionsDb.createAppSession('session-unbound', 'claude', '/workspace/demo-project', 'Unbound');
+
+    assert.equal(sessionsDb.getSessionById('session-bound')?.claude_profile_id, 'profile-work');
+    assert.equal(sessionsDb.getSessionById('session-unbound')?.claude_profile_id, null);
+  });
+});
+
 test('recent sessions are globally ordered, paginated, and limited to visible conversations', async () => {
   await withIsolatedDatabase(() => {
     const fixtures: Array<Parameters<typeof sessionsDb.createSession>> = [

@@ -431,6 +431,24 @@ const addSessionEffortColumn = (db: Database): void => {
   addColumnToTableIfNotExists(db, 'sessions', columnNames, 'effort', 'TEXT');
 };
 
+/**
+ * Adds the `claude_profile_id` column that permanently binds a Claude session
+ * to the account it was created with (`CLOUDCLI_EXTENSION_PLAN.md` F5).
+ *
+ * Left NULL for every existing row and for every non-Claude session on
+ * purpose: NULL is the legacy/un-isolated signal the rest of the stack
+ * already treats as "no profile bound" (`claude-home.resolver.ts`), so
+ * pre-LOT-2 sessions keep resolving `~/.claude` exactly as before. There is
+ * deliberately no setter that changes this column after insert — the binding
+ * is decided once, at session creation, and never re-resolved on resume.
+ */
+const addSessionClaudeProfileIdColumn = (db: Database): void => {
+  const sessionsTableInfo = getTableInfo(db, 'sessions');
+  const columnNames = sessionsTableInfo.map((column) => column.name);
+
+  addColumnToTableIfNotExists(db, 'sessions', columnNames, 'claude_profile_id', 'TEXT');
+};
+
 const ensureProjectsForSessionPaths = (db: Database): void => {
   if (!tableExists(db, 'sessions')) {
     return;
@@ -491,6 +509,7 @@ export const runMigrations = (db: Database) => {
     addProviderSessionIdMapping(db);
     addSessionModelColumn(db);
     addSessionEffortColumn(db);
+    addSessionClaudeProfileIdColumn(db);
     ensureProjectsForSessionPaths(db);
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');

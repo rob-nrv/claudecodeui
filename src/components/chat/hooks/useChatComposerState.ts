@@ -39,6 +39,13 @@ interface UseChatComposerStateArgs {
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
   provider: LLMProvider;
+  /**
+   * The Claude account a brand-new session should be created under. Only
+   * read when `provider === 'claude'` and there is no session yet — once a
+   * session exists, its binding lives on the session row, never here
+   * (CLOUDCLI_EXTENSION_PLAN.md F4/F5).
+   */
+  claudeProfileId?: string | null;
   permissionMode: PermissionMode | string;
   cyclePermissionMode: () => void;
   resolvePermissionModeForProvider: (provider: LLMProvider, requestedMode: PermissionMode | string) => PermissionMode;
@@ -233,6 +240,7 @@ export function useChatComposerState({
   selectedSession,
   currentSessionId,
   provider,
+  claudeProfileId,
   permissionMode,
   cyclePermissionMode,
   resolvePermissionModeForProvider,
@@ -833,6 +841,7 @@ export function useChatComposerState({
       let targetSessionId = selectedSession?.id || currentSessionId || null;
       if (!targetSessionId) {
         let createdSessionName = sessionSummary;
+        let boundClaudeProfileId: string | null = null;
         try {
           const response = await authenticatedFetch('/api/providers/sessions', {
             method: 'POST',
@@ -840,6 +849,10 @@ export function useChatComposerState({
               provider,
               projectPath: resolvedProjectPath,
               initialMessage: messageContent,
+              // Ignored server-side for non-Claude providers; the backend
+              // resolves and validates it once, at creation, and that
+              // binding is permanent (CLOUDCLI_EXTENSION_PLAN.md F4/F5).
+              claudeProfileId: provider === 'claude' ? claudeProfileId ?? undefined : undefined,
             }),
           });
           if (!response.ok) {
@@ -847,6 +860,7 @@ export function useChatComposerState({
           }
           const body = await response.json();
           targetSessionId = body?.data?.sessionId || null;
+          boundClaudeProfileId = typeof body?.data?.claudeProfileId === 'string' ? body.data.claudeProfileId : null;
           // A blank server name would leave the session unlabeled, so the local
           // summary stays the fallback unless a real name comes back.
           const returnedSessionName = typeof body?.data?.sessionName === 'string'
@@ -879,6 +893,7 @@ export function useChatComposerState({
           provider,
           project: selectedProject,
           summary: createdSessionName,
+          claudeProfileId: boundClaudeProfileId,
         });
       }
 
@@ -935,6 +950,7 @@ export function useChatComposerState({
       attachedFiles,
       buildSendOptions,
       currentSessionId,
+      claudeProfileId,
       executeCommand,
       isLoading,
       onSessionProcessing,

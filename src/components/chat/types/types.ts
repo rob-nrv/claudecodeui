@@ -120,12 +120,16 @@ export type SessionEstablishedContext = {
   provider: LLMProvider;
   project: Project;
   summary?: string | null;
+  /** The Claude account the backend bound this brand-new session to, or null. */
+  claudeProfileId?: string | null;
 };
 
 export interface ChatInterfaceProps {
   isActive: boolean;
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
+  /** The Claude account a brand-new session should be created under; ignored once a session exists. */
+  claudeProfileId?: string | null;
   ws: WebSocket | null;
   sendMessage: (message: unknown) => void;
   onFileOpen?: (filePath: string, diffInfo?: any) => void;

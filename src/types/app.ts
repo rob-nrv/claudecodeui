@@ -52,6 +52,9 @@ export interface ProjectSession {
   // Tags the session with the owning project's DB `projectId` so UI handlers
   // (session switching, sidebar focus, etc.) can match against selectedProject.
   __projectId?: string;
+  // The Claude account this session is permanently bound to, or null/undefined
+  // for non-Claude sessions and sessions created before multi-account support.
+  claudeProfileId?: string | null;
   [key: string]: unknown;
 }
 

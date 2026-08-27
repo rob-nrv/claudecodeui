@@ -709,7 +709,8 @@ router.post(
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
-    const result = sessionsService.createAppSession(provider, projectPath, initialMessage);
+    const claudeProfileId = typeof body.claudeProfileId === 'string' ? body.claudeProfileId : undefined;
+    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, claudeProfileId);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );

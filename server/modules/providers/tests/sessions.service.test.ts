@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { closeConnection, initializeDatabase, projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { claudeProfilesDb, closeConnection, initializeDatabase, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
@@ -123,5 +123,69 @@ test('recent sessions map project metadata and preserve database pagination', { 
       total: 2,
       hasMore: true,
     });
+  });
+});
+
+test('creating a Claude session with a real profile id binds and persists it', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async () => {
+    const profile = await claudeProfilesDb.create({
+      id: 'profile-work',
+      displayName: 'Work',
+      configDirectory: '/tmp/claude-profiles/profile-work',
+      isDefault: true,
+    });
+
+    const result = sessionsService.createAppSession(
+      'claude',
+      '/tmp/bound-session-project',
+      'hello',
+      profile.id,
+    );
+
+    assert.equal(result.claudeProfileId, profile.id);
+    assert.equal(sessionsDb.getSessionById(result.sessionId)?.claude_profile_id, profile.id);
+  });
+});
+
+test('creating a Claude session with an unknown profile id is rejected', { concurrency: false }, async () => {
+  await withIsolatedDatabase(() => {
+    assert.throws(
+      () => sessionsService.createAppSession('claude', '/tmp/missing-profile-project', 'hello', 'does-not-exist'),
+      (error: unknown) => {
+        const typedError = error as { code?: string; statusCode?: number };
+        return typedError.code === 'CLAUDE_PROFILE_NOT_FOUND' && typedError.statusCode === 404;
+      },
+    );
+  });
+});
+
+test('a claudeProfileId sent for a non-Claude provider is ignored, not persisted', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async () => {
+    const profile = await claudeProfilesDb.create({
+      id: 'profile-personal',
+      displayName: 'Personal',
+      configDirectory: '/tmp/claude-profiles/profile-personal',
+      isDefault: true,
+    });
+
+    const result = sessionsService.createAppSession(
+      'codex',
+      '/tmp/non-claude-profile-project',
+      'hello',
+      profile.id,
+    );
+
+    assert.equal(result.claudeProfileId, null);
+    assert.equal(sessionsDb.getSessionById(result.sessionId)?.claude_profile_id, null);
+  });
+});
+
+test('session details expose the bound Claude profile id', { concurrency: false }, async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('details-session', 'claude', '/tmp/details-project', 'Title', 'profile-details');
+
+    const details = sessionsService.getSessionDetailsById('details-session');
+
+    assert.equal(details.claudeProfileId, 'profile-details');
   });
 });

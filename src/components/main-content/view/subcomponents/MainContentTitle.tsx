@@ -1,9 +1,11 @@
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 import { usePlugins } from '../../../../contexts/PluginsContext';
 import { getSessionTitle } from '../../../../utils/pageTitle';
+import { useClaudeProfiles } from '../../../settings/hooks/useClaudeProfiles';
 
 type MainContentTitleProps = {
   activeTab: AppTab;
@@ -44,6 +46,7 @@ export default function MainContentTitle({
 }: MainContentTitleProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
+  const { profiles: claudeProfiles } = useClaudeProfiles();
 
   const pluginDisplayName = activeTab.startsWith('plugin:')
     ? plugins.find((p) => p.name === activeTab.replace('plugin:', ''))?.displayName
@@ -51,6 +54,24 @@ export default function MainContentTitle({
 
   const showSessionIcon = activeTab === 'chat' && Boolean(selectedSession);
   const showChatNewSession = activeTab === 'chat' && !selectedSession;
+
+  // Discreet "which account did this run under" indicator — only meaningful
+  // for Claude sessions bound to an account (CLOUDCLI_EXTENSION_PLAN.md F5).
+  // A bound id that no longer resolves (profile removed) still renders,
+  // deliberately, rather than silently disappearing.
+  const sessionProvider = selectedSession?.__provider ?? selectedSession?.provider;
+  const boundClaudeProfileId = selectedSession?.claudeProfileId ?? null;
+  const claudeAccountLabel = useMemo(() => {
+    if (sessionProvider !== 'claude' || !boundClaudeProfileId) {
+      return null;
+    }
+    const profile = claudeProfiles.find((candidate) => candidate.id === boundClaudeProfileId);
+    return profile?.displayName
+      ?? t('mainContent.claudeAccountUnavailable', { defaultValue: 'Unknown account' });
+  }, [sessionProvider, boundClaudeProfileId, claudeProfiles, t]);
+  const projectSubtitle = claudeAccountLabel
+    ? `${selectedProject.displayName} · ${claudeAccountLabel}`
+    : selectedProject.displayName;
 
   return (
     <div className="scrollbar-hide flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
@@ -66,7 +87,7 @@ export default function MainContentTitle({
             <h2 title={getSessionTitle(selectedSession)} className="truncate text-sm font-semibold leading-tight text-foreground">
               {getSessionTitle(selectedSession)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="truncate text-[11px] leading-tight text-muted-foreground">{projectSubtitle}</div>
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">

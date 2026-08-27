@@ -123,6 +123,7 @@ const wss = createWebSocketServer(server, {
             return null;
         },
         resolveClaudeProfileConfigDir: (profileId) => claudeProfilesDb.getById(profileId)?.configDirectory ?? null,
+        resolveSessionClaudeProfileId: (sessionId) => sessionsDb.getSessionById(sessionId)?.claude_profile_id ?? null,
     },
     getPluginPort,
 });

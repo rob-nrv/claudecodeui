@@ -13,6 +13,8 @@ type SessionSummary = {
   summary: string;
   messageCount: number;
   lastActivity: string;
+  /** The Claude account this session is bound to, or null (non-Claude / pre-LOT-2 sessions). */
+  claudeProfileId: string | null;
 };
 
 type SessionRepositoryRow = {
@@ -21,6 +23,7 @@ type SessionRepositoryRow = {
   custom_name?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  claude_profile_id?: string | null;
 };
 
 export type ProjectListItem = {
@@ -124,6 +127,7 @@ function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
     summary: row.custom_name || '',
     messageCount: 0,
     lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+    claudeProfileId: row.claude_profile_id ?? null,
   };
 }
 
