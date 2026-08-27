@@ -71,6 +71,21 @@ export function createClaudeProfilesService(dependencies: ClaudeProfilesServiceD
     },
 
     /**
+     * Lists every registered profile's isolated config directory.
+     *
+     * The single seam for cross-module callers that need to enumerate *all*
+     * profile directories (session discovery/sync, which does not know a
+     * specific profile id up front) rather than resolve one already-known
+     * id via `claudeHomeFor()`. Deliberately returns bare paths only — never
+     * the full `ClaudeProfile` — so a directory listing can never leak
+     * identity or connection-state data to a caller that only needs to walk
+     * a filesystem.
+     */
+    listConfigDirectories(): string[] {
+      return claudeProfilesDb.list().map((profile) => profile.configDirectory);
+    },
+
+    /**
      * Every profile — including the first — gets its own fresh, isolated
      * config directory under `~/.cloudcli/claude-profiles/<id>`; it never
      * reuses `~/.claude`. That directory starts unauthenticated, so a newly

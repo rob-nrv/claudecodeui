@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 
-import { claudeHomeFor } from '@/modules/claude-profiles/index.js';
+import { claudeHomeFor, claudeProfilesService } from '@/modules/claude-profiles/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import {
   buildLookupMap,
@@ -43,14 +43,43 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
   }
 
   /**
-   * Scans ~/.claude/projects and upserts discovered sessions into DB.
+   * Scans ~/.claude/projects, plus every isolated Claude profile's own
+   * `projects` directory, and upserts discovered sessions into DB.
+   *
+   * A profile-bound session's transcript never lives under the legacy
+   * `~/.claude` home — LOT 1 gives each profile its own directory tree
+   * (`claude-home.resolver.ts`) — so scanning only `this.claudeHome` left
+   * every profile-bound session's `jsonl_path` permanently NULL, which made
+   * `fetchHistory` return empty forever regardless of restart/resume
+   * (discovered via a real Pixel session: turns already on disk never
+   * reappeared in Chat after a reload). Each profile directory is scanned
+   * *unbounded* (`since: null`) on every pass rather than sharing the
+   * `since` cursor with the legacy home: that cursor already advances on
+   * every legacy-only scan, so bounding a profile directory by it could
+   * permanently skip files created before the cursor last moved — exactly
+   * the bug this fixes. Profile directories are one account's own project
+   * tree, not the whole filesystem, so a full walk on every sync stays cheap.
    */
   async synchronize(since?: Date): Promise<number> {
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
+    let processed = await this.synchronizeHome(this.claudeHome, since ?? null);
+
+    for (const profileConfigDirectory of claudeProfilesService.listConfigDirectories()) {
+      processed += await this.synchronizeHome(profileConfigDirectory, null);
+    }
+
+    return processed;
+  }
+
+  /**
+   * Scans one Claude home directory's `projects` tree and upserts discovered
+   * sessions into DB. Shared by the legacy home and every profile directory.
+   */
+  private async synchronizeHome(claudeHome: string, since: Date | null): Promise<number> {
+    const nameMap = await buildLookupMap(path.join(claudeHome, 'history.jsonl'), 'sessionId', 'display');
     const files = await findFilesRecursivelyCreatedAfter(
-      path.join(this.claudeHome, 'projects'),
+      path.join(claudeHome, 'projects'),
       '.jsonl',
-      since ?? null
+      since
     );
 
     let processed = 0;
