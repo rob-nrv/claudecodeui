@@ -7,8 +7,14 @@ import spawn from 'cross-spawn';
 
 import type { CliApplication, CliPackageMetadata } from '@/shared/types.js';
 import { findApplicationRoot, getModuleDirectory } from '@/shared/utils.js';
+import {
+  createLocalRuntimeController,
+  createLocalRuntimeRestartService,
+  resolveFallbackHealthUrl,
+} from '@/modules/runtime/index.js';
 
 import { createCliService } from './cli.service.js';
+import { createRuntimeCommandService } from './runtime-command.service.js';
 import { createSandboxCommandService } from './sandbox.service.js';
 
 /**
@@ -60,6 +66,19 @@ export function createCliApplication(): CliApplication {
     wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   });
 
+  const runtimeController = createLocalRuntimeController({ homeDirectory });
+  const runtimeService = createRuntimeCommandService({
+    controller: runtimeController,
+    restartService: createLocalRuntimeRestartService({
+      controller: runtimeController,
+      appRoot: applicationRoot,
+    }),
+    output,
+    fallbackHealthUrl: resolveFallbackHealthUrl(
+      Number.parseInt(process.env.SERVER_PORT || process.env.PORT || '3001', 10),
+    ),
+  });
+
   return createCliService({
     applicationRoot,
     defaultDatabasePath: path.join(homeDirectory, '.cloudcli', 'auth.db'),
@@ -69,6 +88,7 @@ export function createCliApplication(): CliApplication {
     fileSystem,
     output,
     sandboxService,
+    runtimeService,
     getLatestPackageVersion: async () => {
       // Yield first so the default `start` command can begin loading the server
       // before this best-effort npm registry check runs.

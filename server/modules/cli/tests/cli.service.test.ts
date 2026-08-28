@@ -15,6 +15,7 @@ function createHarness() {
   };
   let serverStarts = 0;
   let sandboxArguments: string[] = [];
+  let runtimeArguments: string[] = [];
   const service = createCliService({
     applicationRoot: '/application',
     defaultDatabasePath: '/home/user/.cloudcli/auth.db',
@@ -36,6 +37,12 @@ function createHarness() {
         return 7;
       },
     },
+    runtimeService: {
+      execute: async (argumentsList) => {
+        runtimeArguments = argumentsList;
+        return 5;
+      },
+    },
     getLatestPackageVersion: async () => '1.2.3',
     updateGlobalPackage: () => undefined,
     startServer: async () => {
@@ -51,6 +58,7 @@ function createHarness() {
     errorMessages,
     getServerStarts: () => serverStarts,
     getSandboxArguments: () => sandboxArguments,
+    getRuntimeArguments: () => runtimeArguments,
   };
 }
 
@@ -85,4 +93,25 @@ test('returns a failure code for an unknown command without exiting the process'
 
   assert.equal(exitCode, 1);
   assert.match(harness.errorMessages[0], /Unknown command: unknown/);
+});
+
+test('passes only runtime subcommand arguments to the injected runtime service', async () => {
+  const harness = createHarness();
+
+  const exitCode = await harness.service.run(['runtime', 'stop', '--json', '--timeout', '5000']);
+
+  assert.equal(exitCode, 5);
+  assert.deepEqual(harness.getRuntimeArguments(), ['stop', '--json', '--timeout', '5000']);
+  assert.equal(harness.getServerStarts(), 0);
+});
+
+test('a runtime subcommand is never mistaken for a top-level command', async () => {
+  const harness = createHarness();
+
+  // "status" is also a top-level command; capturing the rest of the argv at
+  // "runtime" is what keeps `cloudcli runtime status` out of showStatus().
+  await harness.service.run(['runtime', 'status']);
+
+  assert.deepEqual(harness.getRuntimeArguments(), ['status']);
+  assert.equal(harness.logMessages.join('\n').includes('CloudCLI UI - Status'), false);
 });

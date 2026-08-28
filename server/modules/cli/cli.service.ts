@@ -10,6 +10,8 @@ import type {
 } from '@/shared/types.js';
 import { terminalTextStyles } from '@/shared/utils.js';
 
+import type { RuntimeCommandService } from './runtime-command.service.js';
+
 type CliServiceDependencies = {
   applicationRoot: string;
   defaultDatabasePath: string;
@@ -19,6 +21,7 @@ type CliServiceDependencies = {
   fileSystem: CliFileSystem;
   output: CliOutput;
   sandboxService: SandboxCommandService;
+  runtimeService: RuntimeCommandService;
   getLatestPackageVersion(): Promise<string>;
   updateGlobalPackage(): void;
   startServer(): Promise<void>;
@@ -57,7 +60,7 @@ function parseCliArguments(argumentsList: string[]): ParsedCliArguments {
       parsedArguments.command = 'version';
     } else if (!argument.startsWith('-')) {
       parsedArguments.command = argument;
-      if (argument === 'sandbox') {
+      if (argument === 'sandbox' || argument === 'runtime') {
         parsedArguments.remainingArguments = argumentsList.slice(argumentIndex + 1);
         break;
       }
@@ -145,6 +148,7 @@ Usage:
 Commands:
   start            Start the CloudCLI server (default)
   sandbox          Manage Docker sandbox environments
+  runtime          Report or stop the local CloudCLI runtime
   browser-use-mcp  Run Browser MCP stdio server
   status           Show configuration and data locations
   update           Update to the latest version
@@ -161,6 +165,8 @@ Examples:
   $ cloudcli                        # Start with defaults
   $ cloudcli --port 8080            # Start on port 8080
   $ cloudcli sandbox ~/my-project   # Run in a Docker sandbox
+  $ cloudcli runtime status --json  # Report runtime state for a wrapper app
+  $ cloudcli runtime stop           # Gracefully stop the running server
   $ cloudcli status                 # Show configuration
 
 Environment Variables:
@@ -243,6 +249,8 @@ export function createCliService(dependencies: CliServiceDependencies): CliAppli
           return 0;
         case 'sandbox':
           return dependencies.sandboxService.execute(parsedArguments.remainingArguments);
+        case 'runtime':
+          return dependencies.runtimeService.execute(parsedArguments.remainingArguments);
         case 'browser-use-mcp':
           await dependencies.startBrowserUseMcp();
           return 0;

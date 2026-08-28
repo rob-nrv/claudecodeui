@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Load environment variables before other imports execute.
 import './load-env.js';
-import fs, { promises as fsPromises } from 'fs';
+import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import http from 'http';
 
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -16,6 +15,11 @@ import {
     providerRuntimeService,
 } from '@/modules/providers/index.js';
 import { createWebSocketServer } from '@/modules/websocket/index.js';
+import {
+    buildLocalServerMarker,
+    createLocalServerMarkerStore,
+    createRuntimeIdentity,
+} from '@/modules/runtime/index.js';
 
 import { getConnectableHost, buildLoopbackOrigins, resolveBindHost } from '../shared/networkHosts.js';
 
@@ -70,6 +74,10 @@ const RUNNING_VERSION = (() => {
         return null;
     }
 })();
+// Minted once per process and published both in the local-server marker and on
+// /health, so a runtime controller can prove the server answering a port is the
+// one it started rather than a leftover marker or an unrelated instance.
+const RUNTIME_IDENTITY = createRuntimeIdentity();
 const systemRoutes = createSystemModule({
     appRoot: APP_ROOT,
     installMode,
@@ -156,7 +164,11 @@ app.get('/health', (req, res) => {
         status: 'ok',
         timestamp: new Date().toISOString(),
         installMode,
-        version: RUNNING_VERSION
+        version: RUNNING_VERSION,
+        runtime: {
+            instanceId: RUNTIME_IDENTITY.instanceId,
+            startedAt: RUNTIME_IDENTITY.startedAt,
+        },
     });
 });
 
@@ -294,49 +306,28 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
 
 const HOST = resolveBindHost(process.env.HOST);
 const DISPLAY_HOST = getConnectableHost(HOST);
-const LOCAL_SERVER_MARKER_PATH = path.join(os.homedir(), '.cloudcli', 'local-server.json');
-
-function getErrorCode(error: unknown): string | undefined {
-    if (typeof error !== 'object' || error === null || !('code' in error)) {
-        return undefined;
-    }
-    return String(error.code);
-}
+const localServerMarkerStore = createLocalServerMarkerStore();
 
 function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
 async function writeLocalServerMarker() {
-    const marker = {
-        pid: process.pid,
+    await localServerMarkerStore.write(buildLocalServerMarker(RUNTIME_IDENTITY, {
         host: HOST,
         port: Number.parseInt(String(SERVER_PORT), 10),
         url: `http://${DISPLAY_HOST}:${SERVER_PORT}`,
         installMode,
         appRoot: APP_ROOT,
-        updatedAt: new Date().toISOString(),
-    };
-
-    await fsPromises.mkdir(path.dirname(LOCAL_SERVER_MARKER_PATH), { recursive: true });
-    await fsPromises.writeFile(LOCAL_SERVER_MARKER_PATH, JSON.stringify(marker, null, 2), 'utf8');
+        version: RUNNING_VERSION,
+    }));
 }
 
 async function removeLocalServerMarker() {
     try {
-        const raw = await fsPromises.readFile(LOCAL_SERVER_MARKER_PATH, 'utf8');
-        const marker = JSON.parse(raw);
-        if (marker.pid && marker.pid !== process.pid) return;
+        await localServerMarkerStore.removeIfOwnedBy(RUNTIME_IDENTITY);
     } catch (error) {
-        if (getErrorCode(error) === 'ENOENT') return;
-    }
-
-    try {
-        await fsPromises.unlink(LOCAL_SERVER_MARKER_PATH);
-    } catch (error) {
-        if (getErrorCode(error) !== 'ENOENT') {
-            console.warn('[WARN] Could not remove local server marker:', getErrorMessage(error));
-        }
+        console.warn('[WARN] Could not remove local server marker:', getErrorMessage(error));
     }
 }
 
