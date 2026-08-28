@@ -20,6 +20,20 @@ export const formatCompactAge = (
   return hours < 24 ? `${hours}hr` : `${Math.floor(hours / 24)}d`;
 };
 
+/**
+ * Elapsed time for a running session, e.g. "12s" or "2m 14s". Derived purely
+ * from `startedAt` and the caller's clock — never a source of truth, just a
+ * display of one, so it stops advancing the instant the caller stops passing
+ * a fresher `currentTime` (the sidebar's shared ticker does this only while a
+ * session is actually running).
+ */
+export const formatElapsedDuration = (startedAt: number, currentTime: Date): string => {
+  const elapsedSeconds = Math.max(0, Math.floor((currentTime.getTime() - startedAt) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return minutes < 1 ? `${seconds}s` : `${minutes}m ${seconds}s`;
+};
+
 export const readProjectSortOrder = (): ProjectSortOrder => {
   try {
     const rawSettings = localStorage.getItem('claude-settings');

@@ -31,7 +31,10 @@ export type SidebarProjectListProps = {
   loadingMoreProjects: Set<string>;
   activeSessions: SessionActivityMap;
   attentionSessionIds: ReadonlySet<string>;
+  claudeProfileNameById: ReadonlyMap<string, string>;
   forceExpanded?: boolean;
+  /** True only for the "Running now" tab — shows profile/state/elapsed/queued detail on running rows. */
+  showRunningDetail?: boolean;
   isProjectStarred: (projectName: string) => boolean;
   onEditingNameChange: (value: string) => void;
   onToggleProject: (projectName: string) => void;
@@ -78,7 +81,9 @@ export default function SidebarProjectList({
   loadingMoreProjects,
   activeSessions,
   attentionSessionIds,
+  claudeProfileNameById,
   forceExpanded = false,
+  showRunningDetail = false,
   isProjectStarred,
   onEditingNameChange,
   onToggleProject,
@@ -152,6 +157,8 @@ export default function SidebarProjectList({
               onLoadMoreSessions={onLoadMoreSessions}
               activeSessions={activeSessions}
               attentionSessionIds={attentionSessionIds}
+              claudeProfileNameById={claudeProfileNameById}
+              showRunningDetail={showRunningDetail}
               onNewSession={onNewSession}
               onEditingSessionNameChange={onEditingSessionNameChange}
               onStartEditingSession={onStartEditingSession}

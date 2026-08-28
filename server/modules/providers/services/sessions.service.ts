@@ -131,14 +131,31 @@ export const sessionsService = {
    *
    * This is intentionally status-only: callers that only need sidebar activity
    * indicators should not attach to chat streams or request replayed messages.
+   *
+   * `countPendingApprovals` is injected by the route layer (backed by
+   * `providerRuntimeService`) rather than imported here — importing it
+   * directly would create a module cycle, since that service already imports
+   * this one to resolve provider-native session ids.
    */
-  listRunningSessions(): Array<{
+  listRunningSessions(countPendingApprovals?: (sessionId: string) => number): Array<{
     sessionId: string;
     provider: LLMProvider;
     startedAt: number;
     lastSeq: number;
+    /** True only when the runtime reports a real pending tool/permission approval for this session. */
+    waiting: boolean;
+    /** The Claude account this run is bound to, or null (non-Claude / unbound sessions). */
+    claudeProfileId: string | null;
   }> {
-    return chatRunRegistry.listRunningRuns();
+    return chatRunRegistry.listRunningRuns().map((run) => {
+      const sessionRow = sessionsDb.getSessionById(run.sessionId);
+      const pendingCount = countPendingApprovals ? countPendingApprovals(run.sessionId) : 0;
+      return {
+        ...run,
+        waiting: pendingCount > 0,
+        claudeProfileId: run.provider === 'claude' ? (sessionRow?.claude_profile_id ?? null) : null,
+      };
+    });
   },
 
   /**

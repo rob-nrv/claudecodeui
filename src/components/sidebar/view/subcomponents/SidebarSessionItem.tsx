@@ -5,18 +5,25 @@ import type { TFunction } from 'i18next';
 import { ActionMenu, Badge, Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import { api } from '../../../../utils/api';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import type { SessionWithProvider } from '../../types/types';
-import { createSessionViewModel, formatCompactAge } from '../../utils/utils';
+import { createSessionViewModel, formatCompactAge, formatElapsedDuration } from '../../utils/utils';
 import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
+import { readQueuedMessage } from '../../../chat/utils/chatStorage';
 
 type SidebarSessionItemProps = {
   project: Project;
   session: SessionWithProvider;
   selectedSession: ProjectSession | null;
   isProcessing: boolean;
+  /** Full activity record for this session when it's processing, else null. */
+  activity: SessionActivity | null;
   needsAttention: boolean;
+  /** Only true on the "Running now" tab — shows the profile/state/elapsed/queued line. */
+  showRunningDetail?: boolean;
+  claudeProfileNameById: ReadonlyMap<string, string>;
   currentTime: Date;
   editingSession: string | null;
   editingSessionName: string;
@@ -48,7 +55,10 @@ export default function SidebarSessionItem({
   session,
   selectedSession,
   isProcessing,
+  activity,
   needsAttention,
+  showRunningDetail = false,
+  claudeProfileNameById,
   currentTime,
   editingSession,
   editingSessionName,
@@ -73,6 +83,33 @@ export default function SidebarSessionItem({
   const showAttentionIndicator = needsAttention && !isSelected;
   const showRecentIndicator = !showAttentionIndicator && !isProcessing && sessionView.isActive;
   const providerLabel = PROVIDER_LABELS[session.__provider];
+
+  // Compact "Work · Running · 2m 14s" / "Personal · Waiting · 1 queued" line
+  // for the Running Sessions tab. Every fragment is a real, provable signal:
+  // the profile label only appears when the run is bound to a known Claude
+  // account, "Waiting" only appears when the server reports a genuine pending
+  // approval (never inferred from silence), and elapsed time is derived, not
+  // authoritative — it stops advancing the instant `activity` disappears.
+  const runningStatusLabel = (() => {
+    if (!showRunningDetail || !isProcessing || !activity) {
+      return null;
+    }
+
+    const profileLabel = activity.claudeProfileId
+      ? claudeProfileNameById.get(activity.claudeProfileId)
+      : undefined;
+    const stateLabel = activity.waiting
+      ? t('running.stateWaiting', 'Waiting')
+      : t('running.stateRunning', 'Running');
+    const elapsedLabel = formatElapsedDuration(activity.startedAt, currentTime);
+    const hasQueuedMessage = Boolean(readQueuedMessage(session.id));
+
+    const parts = [profileLabel, stateLabel, elapsedLabel].filter(Boolean);
+    if (hasQueuedMessage) {
+      parts.push(t('running.queuedCount', '1 queued'));
+    }
+    return parts.join(' · ');
+  })();
 
   // While editing, dismiss only when the user clicks outside the inline rename panel
   // (matches Escape / cancel-button behaviour). The mobile rename lives inside the
@@ -260,10 +297,14 @@ export default function SidebarSessionItem({
                 )}
               </div>
               <div className="mt-0.5 flex items-center">
-                {sessionView.messageCount > 0 && (
-                  <Badge variant="secondary" className="px-1 py-0 text-xs">
-                    {sessionView.messageCount}
-                  </Badge>
+                {runningStatusLabel ? (
+                  <p className="truncate text-[11px] text-muted-foreground">{runningStatusLabel}</p>
+                ) : (
+                  sessionView.messageCount > 0 && (
+                    <Badge variant="secondary" className="px-1 py-0 text-xs">
+                      {sessionView.messageCount}
+                    </Badge>
+                  )
                 )}
               </div>
             </div>
@@ -478,7 +519,11 @@ export default function SidebarSessionItem({
                 )}
               </div>
               <div className="mt-0.5 flex items-center">
-                {sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>}
+                {runningStatusLabel ? (
+                  <p className="truncate text-[11px] text-muted-foreground">{runningStatusLabel}</p>
+                ) : (
+                  sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>
+                )}
               </div>
             </div>
           </div>

@@ -18,6 +18,8 @@ type SidebarProjectSessionsProps = {
   isLoadingMoreSessions: boolean;
   activeSessions: SessionActivityMap;
   attentionSessionIds: ReadonlySet<string>;
+  claudeProfileNameById: ReadonlyMap<string, string>;
+  showRunningDetail?: boolean;
   currentTime: Date;
   editingSession: string | null;
   editingSessionName: string;
@@ -66,6 +68,8 @@ export default function SidebarProjectSessions({
   isLoadingMoreSessions,
   activeSessions,
   attentionSessionIds,
+  claudeProfileNameById,
+  showRunningDetail = false,
   currentTime,
   editingSession,
   editingSessionName,
@@ -126,7 +130,10 @@ export default function SidebarProjectSessions({
               session={session}
               selectedSession={selectedSession}
               isProcessing={activeSessions.has(session.id)}
+              activity={activeSessions.get(session.id) ?? null}
               needsAttention={attentionSessionIds.has(session.id)}
+              claudeProfileNameById={claudeProfileNameById}
+              showRunningDetail={showRunningDetail}
               currentTime={currentTime}
               editingSession={editingSession}
               editingSessionName={editingSessionName}

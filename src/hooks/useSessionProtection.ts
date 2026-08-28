@@ -1,5 +1,7 @@
 import { useCallback, useState } from 'react';
 
+import { nextAfterMarkIdle, nextAfterMarkProcessing, nextAfterSync } from './sessionActivityReducers';
+
 export interface SessionActivity {
   /** Provider-supplied status line; null renders the default activity label. */
   statusText: string | null;
@@ -9,6 +11,16 @@ export interface SessionActivity {
    * the elapsed-time display and the stale `chat_subscribed` idle-ack guard.
    */
   startedAt: number;
+  /**
+   * True only when the server-reported run has a real pending tool/permission
+   * approval (from `providerRuntimeService.getPendingApprovalsForSession`).
+   * Never inferred locally from silence — only `syncProcessingSessions` sets
+   * this, since it is the only channel with visibility into sessions the
+   * user isn't currently viewing.
+   */
+  waiting: boolean;
+  /** The Claude account this run is bound to, or null (non-Claude / unbound). */
+  claudeProfileId: string | null;
 }
 
 export type SessionActivityMap = ReadonlyMap<string, SessionActivity>;
@@ -18,6 +30,8 @@ export type SessionActivitySnapshot = {
   statusText?: string | null;
   canInterrupt?: boolean;
   startedAt?: number;
+  waiting?: boolean;
+  claudeProfileId?: string | null;
 };
 
 export type MarkSessionProcessing = (
@@ -34,31 +48,6 @@ export type SyncProcessingSessions = (
   sessions: readonly SessionActivitySnapshot[],
 ) => void;
 
-const LOCAL_ACTIVITY_GRACE_MS = 10_000;
-
-const sessionActivityMapsMatch = (
-  left: ReadonlyMap<string, SessionActivity>,
-  right: ReadonlyMap<string, SessionActivity>,
-): boolean => {
-  if (left.size !== right.size) {
-    return false;
-  }
-
-  for (const [sessionId, leftActivity] of left) {
-    const rightActivity = right.get(sessionId);
-    if (
-      !rightActivity
-      || leftActivity.statusText !== rightActivity.statusText
-      || leftActivity.canInterrupt !== rightActivity.canInterrupt
-      || leftActivity.startedAt !== rightActivity.startedAt
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
 /**
  * Single source of truth for which sessions are actively processing a
  * request. Everything the chat UI shows (activity indicator, abort
@@ -66,6 +55,10 @@ const sessionActivityMapsMatch = (
  * (`complete`, abort, an authoritative idle subscribe ack) delete the entry
  * atomically. Session ids are always concrete (allocated before the first
  * send), so entries are keyed by real session ids only.
+ *
+ * The actual state-transition logic lives in `sessionActivityReducers.ts` as
+ * plain functions over `prev -> next`, so it can be unit-tested without a
+ * DOM/React renderer; this hook is a thin `useState` wrapper around them.
  */
 export function useSessionProtection() {
   const [processingSessions, setProcessingSessions] = useState<Map<string, SessionActivity>>(
@@ -77,27 +70,7 @@ export function useSessionProtection() {
       return;
     }
 
-    setProcessingSessions((prev) => {
-      const existing = prev.get(sessionId);
-      const next: SessionActivity = {
-        statusText:
-          activity?.statusText !== undefined ? activity.statusText : existing?.statusText ?? null,
-        canInterrupt: activity?.canInterrupt ?? existing?.canInterrupt ?? true,
-        startedAt: existing?.startedAt ?? Date.now(),
-      };
-
-      if (
-        existing
-        && existing.statusText === next.statusText
-        && existing.canInterrupt === next.canInterrupt
-      ) {
-        return prev;
-      }
-
-      const updated = new Map(prev);
-      updated.set(sessionId, next);
-      return updated;
-    });
+    setProcessingSessions((prev) => nextAfterMarkProcessing(prev, sessionId, activity) as Map<string, SessionActivity>);
   }, []);
 
   const markSessionIdle = useCallback<MarkSessionIdle>((sessionId, opts) => {
@@ -105,62 +78,12 @@ export function useSessionProtection() {
       return;
     }
 
-    setProcessingSessions((prev) => {
-      const existing = prev.get(sessionId);
-      if (!existing) {
-        return prev;
-      }
-
-      // Guard against stale `chat_subscribed` idle acks: if a new request
-      // started after the subscribe was sent, the idle ack describes the
-      // older request and must not clear the newer one.
-      if (opts?.ifStartedBefore !== undefined && existing.startedAt >= opts.ifStartedBefore) {
-        return prev;
-      }
-
-      const updated = new Map(prev);
-      updated.delete(sessionId);
-      return updated;
-    });
+    setProcessingSessions((prev) => nextAfterMarkIdle(prev, sessionId, opts) as Map<string, SessionActivity>);
   }, []);
 
   const syncProcessingSessions = useCallback<SyncProcessingSessions>((sessions) => {
     const now = Date.now();
-
-    setProcessingSessions((prev) => {
-      const incoming = new Map<string, SessionActivitySnapshot>();
-      for (const session of sessions) {
-        if (!session.sessionId) {
-          continue;
-        }
-        incoming.set(session.sessionId, session);
-      }
-
-      const updated = new Map<string, SessionActivity>();
-
-      for (const [sessionId, snapshot] of incoming) {
-        const existing = prev.get(sessionId);
-        const snapshotStartedAt =
-          typeof snapshot.startedAt === 'number' && Number.isFinite(snapshot.startedAt) && snapshot.startedAt > 0
-            ? snapshot.startedAt
-            : undefined;
-
-        updated.set(sessionId, {
-          statusText:
-            snapshot.statusText !== undefined ? snapshot.statusText : existing?.statusText ?? null,
-          canInterrupt: snapshot.canInterrupt ?? existing?.canInterrupt ?? true,
-          startedAt: snapshotStartedAt ?? existing?.startedAt ?? now,
-        });
-      }
-
-      for (const [sessionId, activity] of prev) {
-        if (!incoming.has(sessionId) && now - activity.startedAt < LOCAL_ACTIVITY_GRACE_MS) {
-          updated.set(sessionId, activity);
-        }
-      }
-
-      return sessionActivityMapsMatch(prev, updated) ? prev : updated;
-    });
+    setProcessingSessions((prev) => nextAfterSync(prev, sessions, now) as Map<string, SessionActivity>);
   }, []);
 
   return {

@@ -6,6 +6,12 @@ import test from 'node:test';
 
 import { claudeProfilesDb, closeConnection, initializeDatabase, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { chatRunRegistry } from '@/modules/websocket/index.js';
+
+class FakeConnection {
+  readyState = 1; // WS_OPEN_STATE
+  send(): void {}
+}
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -18,6 +24,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
+    chatRunRegistry.clearAll();
     closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
@@ -187,5 +194,85 @@ test('session details expose the bound Claude profile id', { concurrency: false 
     const details = sessionsService.getSessionDetailsById('details-session');
 
     assert.equal(details.claudeProfileId, 'profile-details');
+  });
+});
+
+test('listRunningSessions: a running Claude session reports its bound profile id', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async () => {
+    const profile = await claudeProfilesDb.create({
+      id: 'profile-running-work',
+      displayName: 'Work',
+      configDirectory: '/tmp/claude-profiles/profile-running-work',
+      isDefault: true,
+    });
+    sessionsDb.createAppSession('running-claude-session', 'claude', '/tmp/running-project', 'Title', profile.id);
+    chatRunRegistry.startRun({
+      appSessionId: 'running-claude-session',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: new FakeConnection(),
+      userId: null,
+    });
+
+    const running = sessionsService.listRunningSessions();
+
+    assert.equal(running.length, 1);
+    assert.equal(running[0]?.claudeProfileId, 'profile-running-work');
+    assert.equal(running[0]?.waiting, false);
+  });
+});
+
+test('listRunningSessions: a non-Claude session never reports a claudeProfileId', { concurrency: false }, async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('running-codex-session', 'codex', '/tmp/running-project');
+    chatRunRegistry.startRun({
+      appSessionId: 'running-codex-session',
+      provider: 'codex',
+      providerSessionId: null,
+      connection: new FakeConnection(),
+      userId: null,
+    });
+
+    const running = sessionsService.listRunningSessions();
+
+    assert.equal(running.length, 1);
+    assert.equal(running[0]?.claudeProfileId, null);
+  });
+});
+
+test('listRunningSessions: waiting is true only when the injected pending-approval count is real and positive', { concurrency: false }, async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('waiting-session', 'claude', '/tmp/running-project');
+    chatRunRegistry.startRun({
+      appSessionId: 'waiting-session',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: new FakeConnection(),
+      userId: null,
+    });
+
+    const runningWithApproval = sessionsService.listRunningSessions(() => 1);
+    assert.equal(runningWithApproval[0]?.waiting, true);
+
+    const runningWithoutApproval = sessionsService.listRunningSessions(() => 0);
+    assert.equal(runningWithoutApproval[0]?.waiting, false);
+  });
+});
+
+test('listRunningSessions: a completed run no longer appears at all (no phantom Running entries)', { concurrency: false }, async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('finished-session', 'claude', '/tmp/running-project');
+    chatRunRegistry.startRun({
+      appSessionId: 'finished-session',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: new FakeConnection(),
+      userId: null,
+    });
+    chatRunRegistry.completeRun('finished-session', { exitCode: 0 });
+
+    const running = sessionsService.listRunningSessions();
+
+    assert.equal(running.length, 0);
   });
 });

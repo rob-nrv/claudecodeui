@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 
 import { api } from '../../../utils/api';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
+import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionActivityMap } from '../../../hooks/useSessionProtection';
 import type {
@@ -178,14 +179,27 @@ export function useSidebarController({
   const isSidebarCollapsed = !isMobile && !sidebarVisible;
   const activeSessionIds = useMemo(() => new Set(activeSessions.keys()), [activeSessions]);
   const runningSessionsCount = activeSessionIds.size;
+  const { profiles: claudeProfiles } = useClaudeProfiles();
+  const claudeProfileNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const profile of claudeProfiles) {
+      map.set(profile.id, profile.displayName);
+    }
+    return map;
+  }, [claudeProfiles]);
 
+  // A single shared ticker drives every relative-time display in the sidebar
+  // (session age, running-session elapsed time). It only speeds up to a 1s
+  // cadence while a session is actually running — idle browsing stays at the
+  // cheap 60s cadence, so there is no always-on per-second timer.
   useEffect(() => {
+    const intervalMs = runningSessionsCount > 0 ? 1000 : 60000;
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 60000);
+    }, intervalMs);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [runningSessionsCount]);
 
   useEffect(() => {
     setInitialSessionsLoaded(new Set());
@@ -1081,6 +1095,7 @@ export function useSidebarController({
     showVersionModal,
     filteredProjects,
     runningSessionsCount,
+    claudeProfileNameById,
     archivedProjects: filteredArchivedProjects,
     archivedSessions: filteredArchivedSessions,
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,

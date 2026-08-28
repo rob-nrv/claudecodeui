@@ -19,6 +19,8 @@ type RunningSessionApiItem = {
   startedAt?: unknown;
   statusText?: unknown;
   canInterrupt?: unknown;
+  waiting?: unknown;
+  claudeProfileId?: unknown;
 };
 
 type RunningSessionsApiPayload = {
@@ -120,6 +122,8 @@ function AppContentInner() {
               startedAt: parseStartedAt(session.startedAt),
               statusText: typeof session.statusText === 'string' ? session.statusText : undefined,
               canInterrupt: typeof session.canInterrupt === 'boolean' ? session.canInterrupt : undefined,
+              waiting: typeof session.waiting === 'boolean' ? session.waiting : undefined,
+              claudeProfileId: typeof session.claudeProfileId === 'string' ? session.claudeProfileId : null,
             };
           })
           .filter((session): session is NonNullable<typeof session> => Boolean(session)),
