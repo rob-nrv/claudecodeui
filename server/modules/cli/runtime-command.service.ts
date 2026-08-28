@@ -4,6 +4,8 @@ import type {
   RuntimeController,
   RuntimeRestartResult,
   RuntimeRestartService,
+  RuntimeStartResult,
+  RuntimeStartService,
   RuntimeStatus,
   RuntimeStopResult,
 } from '@/modules/runtime/index.js';
@@ -11,6 +13,7 @@ import type {
 type RuntimeCommandDependencies = {
   controller: RuntimeController;
   restartService: RuntimeRestartService;
+  startService: RuntimeStartService;
   output: CliOutput;
   /** Probed only when no marker exists, so a marker-less server is still found. */
   fallbackHealthUrl: string;
@@ -98,6 +101,23 @@ function describeStopOutcome(result: RuntimeStopResult, timeoutMs: number): stri
   }
 }
 
+function describeStartOutcome(result: RuntimeStartResult, timeoutMs: number): string {
+  switch (result.outcome) {
+    case 'started':
+      return `${terminalTextStyles.ok('[OK]')} CloudCLI started.`;
+    case 'already-running':
+      return `${terminalTextStyles.ok('[OK]')} CloudCLI was already running.`;
+    case 'already-starting':
+      return `${terminalTextStyles.warn('[WARN]')} CloudCLI is already starting; check status instead of starting again.`;
+    case 'blocked-foreign-instance':
+      return `${terminalTextStyles.error('[ERROR]')} A different, unverified process is using this port. Refusing to start a second server on it.`;
+    case 'launch-failed':
+      return `${terminalTextStyles.error('[ERROR]')} Could not start CloudCLI: ${result.launchError}`;
+    case 'start-timeout':
+      return `${terminalTextStyles.error('[ERROR]')} CloudCLI did not come up within ${Math.round(timeoutMs / 1000)}s.`;
+  }
+}
+
 function describeRestartOutcome(result: RuntimeRestartResult, timeoutMs: number): string {
   switch (result.outcome) {
     case 'restarted':
@@ -119,10 +139,15 @@ function showRuntimeHelp(output: CliOutput): void {
   output.log(`
 Usage:
   cloudcli runtime status  [--json]
+  cloudcli runtime start   [--json] [--timeout <ms>]
   cloudcli runtime stop    [--json] [--timeout <ms>]
   cloudcli runtime restart [--json] [--timeout <ms>]
 
   status   Report the runtime state. Always exits 0; the state is in the output.
+  start    Launch the runtime detached from this process, and confirm it became
+           healthy. A no-op if it is already online. Does not build; run
+           "npm run build" first if you changed server code. Exits 0 on success,
+           1 otherwise.
   stop     Gracefully stop the runtime this installation started.
            Exits 0 once stopped, 1 otherwise.
   restart  Stop, then start a replacement detached from this process, and confirm
@@ -153,6 +178,19 @@ export function createRuntimeCommandService(
           printStatus(output, status);
         }
         return 0;
+      }
+
+      if (parsed.subcommand === 'start') {
+        const timeoutMs = Number.isInteger(parsed.timeoutMs) && parsed.timeoutMs! > 0
+          ? parsed.timeoutMs
+          : undefined;
+        const result = await dependencies.startService.start({ fallbackHealthUrl, timeoutMs });
+        if (parsed.json) {
+          output.log(JSON.stringify(result));
+        } else {
+          output.log(describeStartOutcome(result, timeoutMs ?? 90_000));
+        }
+        return result.outcome === 'started' || result.outcome === 'already-running' ? 0 : 1;
       }
 
       if (parsed.subcommand === 'stop') {

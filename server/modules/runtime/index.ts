@@ -49,9 +49,19 @@ export {
   createRuntimeRestartService,
 } from './runtime-restart.service.js';
 export {
+  type RuntimeStartDependencies,
+  type RuntimeStartOptions,
+  type RuntimeStartOutcome,
+  type RuntimeStartResult,
+  type RuntimeStartService,
+  DEFAULT_START_TIMEOUT_MS,
+  createRuntimeStartService,
+} from './runtime-start.service.js';
+export {
   createDetachedServerLauncher,
   createLocalRuntimeController,
   createLocalRuntimeRestartService,
+  createLocalRuntimeStartService,
   isProcessAlive,
   resolveFallbackHealthUrl,
   resolveServerEntryPath,

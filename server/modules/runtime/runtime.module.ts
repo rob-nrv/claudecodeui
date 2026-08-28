@@ -12,6 +12,7 @@ import { type RuntimeController, createRuntimeController } from './runtime-contr
 import { createLocalServerMarkerStore } from './runtime-marker.store.js';
 import { createRuntimeProbe } from './runtime-probe.js';
 import { type RuntimeRestartService, createRuntimeRestartService } from './runtime-restart.service.js';
+import { type RuntimeStartService, createRuntimeStartService } from './runtime-start.service.js';
 
 /** Short by design: a local health check that needs a second has already told us something. */
 const DEFAULT_HEALTH_TIMEOUT_MS = 1_000;
@@ -132,6 +133,20 @@ export function createLocalRuntimeRestartService(options: {
   environment?: NodeJS.ProcessEnv;
 }): RuntimeRestartService {
   return createRuntimeRestartService({
+    controller: options.controller,
+    launch: createDetachedServerLauncher(options),
+    wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    now: () => new Date(),
+  });
+}
+
+export function createLocalRuntimeStartService(options: {
+  controller: RuntimeController;
+  appRoot: string;
+  nodePath?: string;
+  environment?: NodeJS.ProcessEnv;
+}): RuntimeStartService {
+  return createRuntimeStartService({
     controller: options.controller,
     launch: createDetachedServerLauncher(options),
     wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),

@@ -10,6 +10,7 @@ import { findApplicationRoot, getModuleDirectory } from '@/shared/utils.js';
 import {
   createLocalRuntimeController,
   createLocalRuntimeRestartService,
+  createLocalRuntimeStartService,
   resolveFallbackHealthUrl,
 } from '@/modules/runtime/index.js';
 
@@ -70,6 +71,10 @@ export function createCliApplication(): CliApplication {
   const runtimeService = createRuntimeCommandService({
     controller: runtimeController,
     restartService: createLocalRuntimeRestartService({
+      controller: runtimeController,
+      appRoot: applicationRoot,
+    }),
+    startService: createLocalRuntimeStartService({
       controller: runtimeController,
       appRoot: applicationRoot,
     }),

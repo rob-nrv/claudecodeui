@@ -166,6 +166,7 @@ Examples:
   $ cloudcli --port 8080            # Start on port 8080
   $ cloudcli sandbox ~/my-project   # Run in a Docker sandbox
   $ cloudcli runtime status --json  # Report runtime state for a wrapper app
+  $ cloudcli runtime start          # Start the runtime detached, verified healthy
   $ cloudcli runtime stop           # Gracefully stop the running server
   $ cloudcli status                 # Show configuration
 

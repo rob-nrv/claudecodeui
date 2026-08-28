@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { CliOutput } from '@/shared/types.js';
-import type { RuntimeRestartResult, RuntimeStatus, RuntimeStopResult } from '@/modules/runtime/index.js';
+import type { RuntimeRestartResult, RuntimeStartResult, RuntimeStatus, RuntimeStopResult } from '@/modules/runtime/index.js';
 
 import { createRuntimeCommandService } from '../runtime-command.service.js';
 
@@ -32,16 +32,25 @@ const RESTARTED: RuntimeRestartResult = {
   launchError: null,
 };
 
+const STARTED: RuntimeStartResult = {
+  outcome: 'started',
+  newInstanceId: 'instance-b',
+  status: { state: 'online', reason: 'verified', ownedByMarker: true, instanceId: 'instance-b', url: 'http://localhost:3001', pid: 5150 },
+  launchError: null,
+};
+
 function createHarness(overrides: {
   status?: RuntimeStatus;
   stopResult?: RuntimeStopResult;
   restartResult?: RuntimeRestartResult;
+  startResult?: RuntimeStartResult;
 } = {}) {
   const logMessages: string[] = [];
   const errorMessages: string[] = [];
   const statusCalls: unknown[] = [];
   const stopCalls: unknown[] = [];
   const restartCalls: unknown[] = [];
+  const startCalls: unknown[] = [];
   const output: CliOutput = {
     log: (message = '') => logMessages.push(message),
     error: (message = '') => errorMessages.push(message),
@@ -66,9 +75,15 @@ function createHarness(overrides: {
         return overrides.restartResult ?? RESTARTED;
       },
     },
+    startService: {
+      start: async (options) => {
+        startCalls.push(options);
+        return overrides.startResult ?? STARTED;
+      },
+    },
   });
 
-  return { service, logMessages, errorMessages, statusCalls, stopCalls, restartCalls };
+  return { service, logMessages, errorMessages, statusCalls, stopCalls, restartCalls, startCalls };
 }
 
 test('status --json emits the RuntimeStatus contract verbatim for a wrapper app', async () => {
@@ -184,6 +199,59 @@ test('an unknown or missing subcommand exits 1 with usage', async () => {
   assert.match(harness.errorMessages.join('\n'), /Unknown runtime command: reboot/);
   assert.match(harness.errorMessages.join('\n'), /Unknown runtime command: \(none\)/);
   assert.match(harness.logMessages.join('\n'), /cloudcli runtime status/);
+});
+
+test('start exits 0 and reports the new instance', async () => {
+  const harness = createHarness();
+
+  assert.equal(await harness.service.execute(['start']), 0);
+  assert.match(harness.logMessages.join('\n'), /CloudCLI started/);
+  assert.deepEqual(harness.startCalls, [
+    { fallbackHealthUrl: 'http://127.0.0.1:3001/health', timeoutMs: undefined },
+  ]);
+});
+
+test('start --json emits the full result', async () => {
+  const harness = createHarness();
+
+  await harness.service.execute(['start', '--json', '--timeout=120000']);
+
+  assert.deepEqual(JSON.parse(harness.logMessages[0]), STARTED);
+  assert.deepEqual(harness.startCalls, [
+    { fallbackHealthUrl: 'http://127.0.0.1:3001/health', timeoutMs: 120000 },
+  ]);
+});
+
+test('start exits 0 and is a no-op when already running', async () => {
+  const harness = createHarness({
+    startResult: { ...STARTED, outcome: 'already-running', newInstanceId: 'instance-a' },
+  });
+
+  assert.equal(await harness.service.execute(['start']), 0);
+  assert.match(harness.logMessages.join('\n'), /already running/);
+});
+
+test('start exits 1 without launching a second server onto a foreign-held port', async () => {
+  const harness = createHarness({
+    startResult: { ...STARTED, outcome: 'blocked-foreign-instance', newInstanceId: null },
+  });
+
+  assert.equal(await harness.service.execute(['start']), 1);
+  assert.match(harness.logMessages.join('\n'), /unverified process is using this port/);
+});
+
+test('start surfaces a launch failure the same way restart does', async () => {
+  const harness = createHarness({
+    startResult: {
+      ...STARTED,
+      outcome: 'launch-failed',
+      newInstanceId: null,
+      launchError: 'CloudCLI has not been built yet (/app/dist-server/server/index.js is missing). Run "npm run build" first.',
+    },
+  });
+
+  assert.equal(await harness.service.execute(['start']), 1);
+  assert.match(harness.logMessages.join('\n'), /has not been built yet/);
 });
 
 test('restart exits 0 and reports the new instance', async () => {
