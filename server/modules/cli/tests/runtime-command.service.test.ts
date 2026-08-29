@@ -207,7 +207,12 @@ test('start exits 0 and reports the new instance', async () => {
   assert.equal(await harness.service.execute(['start']), 0);
   assert.match(harness.logMessages.join('\n'), /CloudCLI started/);
   assert.deepEqual(harness.startCalls, [
-    { fallbackHealthUrl: 'http://127.0.0.1:3001/health', timeoutMs: undefined },
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: undefined,
+      stabilityChecks: undefined,
+      stabilityIntervalMs: undefined,
+    },
   ]);
 });
 
@@ -218,7 +223,34 @@ test('start --json emits the full result', async () => {
 
   assert.deepEqual(JSON.parse(harness.logMessages[0]), STARTED);
   assert.deepEqual(harness.startCalls, [
-    { fallbackHealthUrl: 'http://127.0.0.1:3001/health', timeoutMs: 120000 },
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: 120000,
+      stabilityChecks: undefined,
+      stabilityIntervalMs: undefined,
+    },
+  ]);
+});
+
+test('start forwards --stability-checks and --stability-interval, and rejects nonsense values', async () => {
+  const harness = createHarness();
+
+  await harness.service.execute(['start', '--stability-checks', '4', '--stability-interval=250']);
+  await harness.service.execute(['start', '--stability-checks', '-1']);
+
+  assert.deepEqual(harness.startCalls, [
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: undefined,
+      stabilityChecks: 4,
+      stabilityIntervalMs: 250,
+    },
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: undefined,
+      stabilityChecks: undefined,
+      stabilityIntervalMs: undefined,
+    },
   ]);
 });
 
@@ -238,6 +270,15 @@ test('start exits 1 without launching a second server onto a foreign-held port',
 
   assert.equal(await harness.service.execute(['start']), 1);
   assert.match(harness.logMessages.join('\n'), /unverified process is using this port/);
+});
+
+test('start exits 1 when the new instance answered once then disappeared', async () => {
+  const harness = createHarness({
+    startResult: { ...STARTED, outcome: 'unstable', newInstanceId: null },
+  });
+
+  assert.equal(await harness.service.execute(['start']), 1);
+  assert.match(harness.logMessages.join('\n'), /disappeared before it could be confirmed/);
 });
 
 test('start surfaces a launch failure the same way restart does', async () => {
@@ -260,7 +301,12 @@ test('restart exits 0 and reports the new instance', async () => {
   assert.equal(await harness.service.execute(['restart']), 0);
   assert.match(harness.logMessages.join('\n'), /CloudCLI restarted/);
   assert.deepEqual(harness.restartCalls, [
-    { fallbackHealthUrl: 'http://127.0.0.1:3001/health', timeoutMs: undefined },
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: undefined,
+      stabilityChecks: undefined,
+      stabilityIntervalMs: undefined,
+    },
   ]);
 });
 
@@ -271,7 +317,27 @@ test('restart --json carries both instance ids so a wrapper can verify the swap'
 
   assert.deepEqual(JSON.parse(harness.logMessages[0]), RESTARTED);
   assert.deepEqual(harness.restartCalls, [
-    { fallbackHealthUrl: 'http://127.0.0.1:3001/health', timeoutMs: 120000 },
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: 120000,
+      stabilityChecks: undefined,
+      stabilityIntervalMs: undefined,
+    },
+  ]);
+});
+
+test('restart forwards --stability-checks and --stability-interval', async () => {
+  const harness = createHarness();
+
+  await harness.service.execute(['restart', '--stability-checks=3', '--stability-interval', '1000']);
+
+  assert.deepEqual(harness.restartCalls, [
+    {
+      fallbackHealthUrl: 'http://127.0.0.1:3001/health',
+      timeoutMs: undefined,
+      stabilityChecks: 3,
+      stabilityIntervalMs: 1000,
+    },
   ]);
 });
 
@@ -291,6 +357,15 @@ test('a restart blocked by a failed stop exits 1 without claiming anything start
 
   assert.equal(await harness.service.execute(['restart']), 1);
   assert.match(harness.logMessages.join('\n'), /Could not stop the running CloudCLI/);
+});
+
+test('restart exits 1 when the replacement answered once then disappeared', async () => {
+  const harness = createHarness({
+    restartResult: { ...RESTARTED, outcome: 'unstable', newInstanceId: null },
+  });
+
+  assert.equal(await harness.service.execute(['restart']), 1);
+  assert.match(harness.logMessages.join('\n'), /disappeared before it could be confirmed/);
 });
 
 test('a launch failure surfaces the underlying reason', async () => {

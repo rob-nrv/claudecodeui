@@ -12,6 +12,7 @@
 // recovering an interrupted promotion; folding a build in here would make the
 // one operation that must stay predictable both slow and failure-prone.
 import type { RuntimeController } from './runtime-controller.service.js';
+import { confirmStableOnline } from './runtime-stability.js';
 import type { RuntimeStatus } from './runtime-status.js';
 
 export type RuntimeRestartOutcome =
@@ -26,7 +27,9 @@ export type RuntimeRestartOutcome =
   /** Launched, but nothing became healthy before the deadline. */
   | 'start-timeout'
   /** Something answered, but it is the instance we thought we stopped. */
-  | 'same-instance';
+  | 'same-instance'
+  /** Answered a health check once, then disappeared or changed identity before confirmation. */
+  | 'unstable';
 
 export type RuntimeRestartResult = {
   outcome: RuntimeRestartOutcome;
@@ -51,6 +54,9 @@ export type RuntimeRestartOptions = {
   timeoutMs?: number;
   pollIntervalMs?: number;
   stopTimeoutMs?: number;
+  /** How many extra observations must agree before a first ONLINE reading counts as replaced. */
+  stabilityChecks?: number;
+  stabilityIntervalMs?: number;
 };
 
 /** Sized for a cold proot start: module load plus the database migration pass. */
@@ -124,11 +130,35 @@ export function createRuntimeRestartService(dependencies: RuntimeRestartDependen
           };
         }
 
+        // A new identity answering once is also what a replacement that
+        // crashes moments later looks like. Re-observe it before declaring
+        // the old instance replaced.
+        const confirmation = await confirmStableOnline(
+          latest,
+          {
+            status: () => controller.status(
+              { fallbackHealthUrl },
+              { kind: 'start', since, deadlineMs: timeoutMs },
+            ),
+            wait: dependencies.wait,
+          },
+          { checks: options.stabilityChecks, intervalMs: options.stabilityIntervalMs },
+        );
+        if (!confirmation.stable) {
+          return {
+            outcome: 'unstable',
+            previousInstanceId,
+            newInstanceId: null,
+            status: confirmation.status,
+            launchError: null,
+          };
+        }
+
         return {
           outcome: previousInstanceId ? 'restarted' : 'started',
           previousInstanceId,
-          newInstanceId: latest.instanceId,
-          status: latest,
+          newInstanceId: confirmation.status.instanceId,
+          status: confirmation.status,
           launchError: null,
         };
       }

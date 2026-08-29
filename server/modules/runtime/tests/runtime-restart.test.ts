@@ -153,6 +153,23 @@ test('a replacement that never becomes healthy times out instead of looping fore
   assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
 });
 
+test('a replacement that appears then disappears before ever answering health never reports restarted', async () => {
+  // Same shape as the start bug: the port briefly reads as starting, then the
+  // child dies before /health ever answers once.
+  const harness = createHarness({
+    statuses: [
+      status({ state: 'starting', reason: 'awaiting-health', ownedByMarker: false, instanceId: null }),
+      STOPPED,
+    ],
+  });
+
+  const result = await harness.service.restart({ timeoutMs: 2_000, pollIntervalMs: 500 });
+
+  assert.equal(result.outcome, 'start-timeout');
+  assert.equal(result.newInstanceId, null);
+  assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
+});
+
 test('a slow replacement is waited for rather than declared failed early', async () => {
   const harness = createHarness({
     statuses: [
@@ -166,7 +183,8 @@ test('a slow replacement is waited for rather than declared failed early', async
 
   assert.equal(result.outcome, 'restarted');
   assert.equal(result.newInstanceId, 'instance-b');
-  assert.equal(harness.events.filter((event) => event === 'status').length, 3);
+  // Three polls to find it online, then two more agreeing observations to confirm it.
+  assert.equal(harness.events.filter((event) => event === 'status').length, 5);
 });
 
 test('a runtime that comes back without an identity still counts as replaced', async () => {
@@ -179,5 +197,37 @@ test('a runtime that comes back without an identity still counts as replaced', a
   const result = await harness.service.restart();
 
   assert.equal(result.outcome, 'restarted');
+  assert.equal(result.newInstanceId, null);
+});
+
+test('a replacement that answers a health check once and is gone on the next look is not reported as restarted', async () => {
+  // Same shape as the start bug: the replacement briefly answers, then a
+  // follow-up status read finds only a stale marker.
+  const harness = createHarness({
+    statuses: [
+      status({ instanceId: 'instance-b' }),
+      STOPPED,
+    ],
+  });
+
+  const result = await harness.service.restart();
+
+  assert.equal(result.outcome, 'unstable');
+  assert.equal(result.newInstanceId, null);
+  assert.equal(result.previousInstanceId, 'instance-a');
+  assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
+});
+
+test('a replacement whose identity changes mid-confirmation is not reported as restarted', async () => {
+  const harness = createHarness({
+    statuses: [
+      status({ instanceId: 'instance-b' }),
+      status({ instanceId: 'instance-c', reason: 'instance-mismatch', state: 'error', ownedByMarker: false }),
+    ],
+  });
+
+  const result = await harness.service.restart();
+
+  assert.equal(result.outcome, 'unstable');
   assert.equal(result.newInstanceId, null);
 });

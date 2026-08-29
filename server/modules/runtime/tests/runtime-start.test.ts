@@ -67,7 +67,9 @@ test('nothing running launches and confirms a verified identity came online', as
 
   assert.equal(result.outcome, 'started');
   assert.equal(result.newInstanceId, 'instance-b');
-  assert.deepEqual(harness.events, ['status', 'launch', 'status']);
+  // One poll finds it online, then two more agreeing observations confirm it
+  // before the outcome is reported as started.
+  assert.deepEqual(harness.events, ['status', 'launch', 'status', 'status', 'status']);
 });
 
 test('an already-online runtime is left alone: no launch attempted', async () => {
@@ -122,6 +124,22 @@ test('a launch that never becomes healthy times out instead of looping forever',
   assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
 });
 
+test('a process that appears then disappears before ever answering health never reports started', async () => {
+  // The marker is written and the port briefly reads as starting — then the
+  // child dies before /health ever answers once. This must fail the same way
+  // as a process that never appeared at all, never as a success.
+  const harness = createHarness({
+    initialStatus: STOPPED,
+    statuses: [STARTING, STOPPED],
+  });
+
+  const result = await harness.service.start({ timeoutMs: 2_000, pollIntervalMs: 500 });
+
+  assert.equal(result.outcome, 'start-timeout');
+  assert.equal(result.newInstanceId, null);
+  assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
+});
+
 test('a slow boot is waited for rather than declared failed early', async () => {
   const harness = createHarness({
     initialStatus: STOPPED,
@@ -155,4 +173,73 @@ test('start never calls stop, unlike restart', async () => {
   await harness.service.start();
 
   assert.equal(harness.events.includes('stop'), false);
+});
+
+test('an instance that answers a health check once and is gone on the next look is not reported as started', async () => {
+  // This is the exact shape of the real bug: `start` sees ONLINE, and the very
+  // next status read — same as a user immediately running `runtime status` —
+  // finds the process already gone.
+  const harness = createHarness({
+    initialStatus: STOPPED,
+    statuses: [
+      status({ instanceId: 'instance-b' }),
+      STOPPED,
+    ],
+  });
+
+  const result = await harness.service.start();
+
+  assert.equal(result.outcome, 'unstable');
+  assert.equal(result.newInstanceId, null);
+  assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
+});
+
+test('a marker that goes stale mid-confirmation is not reported as started', async () => {
+  const STALE_MARKER = status({
+    state: 'stopped',
+    reason: 'stale-marker',
+    ownedByMarker: false,
+    instanceId: null,
+    url: null,
+    pid: null,
+  });
+  const harness = createHarness({
+    initialStatus: STOPPED,
+    statuses: [status({ instanceId: 'instance-b' }), STALE_MARKER],
+  });
+
+  const result = await harness.service.start();
+
+  assert.equal(result.outcome, 'unstable');
+  assert.equal(result.status.reason, 'stale-marker');
+});
+
+test('an instance whose identity changes mid-confirmation is not reported as started', async () => {
+  // A foreign process taking the port between the first sighting and the
+  // confirmation checks must fail confirmation, not read as a verified start.
+  const harness = createHarness({
+    initialStatus: STOPPED,
+    statuses: [
+      status({ instanceId: 'instance-b' }),
+      status({ instanceId: 'instance-c', reason: 'instance-mismatch', state: 'error', ownedByMarker: false }),
+    ],
+  });
+
+  const result = await harness.service.start();
+
+  assert.equal(result.outcome, 'unstable');
+  assert.equal(result.newInstanceId, null);
+});
+
+test('a start attempt launches exactly once regardless of how many status polls it takes', async () => {
+  const harness = createHarness({
+    initialStatus: STOPPED,
+    statuses: [STARTING, STARTING, status({ instanceId: 'instance-b' })],
+  });
+
+  const result = await harness.service.start({ timeoutMs: 90_000, pollIntervalMs: 500 });
+
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.newInstanceId, 'instance-b');
+  assert.equal(harness.events.filter((event) => event === 'launch').length, 1);
 });

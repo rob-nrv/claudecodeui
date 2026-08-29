@@ -41,6 +41,14 @@ export {
   createRuntimeProbe,
 } from './runtime-probe.js';
 export {
+  type RuntimeStabilityDependencies,
+  type RuntimeStabilityOptions,
+  type RuntimeStabilityResult,
+  DEFAULT_STABILITY_CHECKS,
+  DEFAULT_STABILITY_INTERVAL_MS,
+  confirmStableOnline,
+} from './runtime-stability.js';
+export {
   type RuntimeRestartOptions,
   type RuntimeRestartOutcome,
   type RuntimeRestartResult,

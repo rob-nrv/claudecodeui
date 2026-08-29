@@ -27,6 +27,8 @@ type ParsedRuntimeArguments = {
   subcommand: string;
   json: boolean;
   timeoutMs?: number;
+  stabilityChecks?: number;
+  stabilityIntervalMs?: number;
 };
 
 function parseRuntimeArguments(argumentsList: string[]): ParsedRuntimeArguments {
@@ -40,12 +42,25 @@ function parseRuntimeArguments(argumentsList: string[]): ParsedRuntimeArguments 
       parsed.timeoutMs = Number.parseInt(argumentsList[++index] ?? '', 10);
     } else if (argument.startsWith('--timeout=')) {
       parsed.timeoutMs = Number.parseInt(argument.slice('--timeout='.length), 10);
+    } else if (argument === '--stability-checks') {
+      parsed.stabilityChecks = Number.parseInt(argumentsList[++index] ?? '', 10);
+    } else if (argument.startsWith('--stability-checks=')) {
+      parsed.stabilityChecks = Number.parseInt(argument.slice('--stability-checks='.length), 10);
+    } else if (argument === '--stability-interval') {
+      parsed.stabilityIntervalMs = Number.parseInt(argumentsList[++index] ?? '', 10);
+    } else if (argument.startsWith('--stability-interval=')) {
+      parsed.stabilityIntervalMs = Number.parseInt(argument.slice('--stability-interval='.length), 10);
     } else if (!argument.startsWith('-') && !parsed.subcommand) {
       parsed.subcommand = argument;
     }
   }
 
   return parsed;
+}
+
+/** Rejects NaN, zero, and negative values so a malformed flag falls back to the built-in default. */
+function positiveIntOrUndefined(value: number | undefined): number | undefined {
+  return Number.isInteger(value) && value! > 0 ? value : undefined;
 }
 
 /**
@@ -115,6 +130,8 @@ function describeStartOutcome(result: RuntimeStartResult, timeoutMs: number): st
       return `${terminalTextStyles.error('[ERROR]')} Could not start CloudCLI: ${result.launchError}`;
     case 'start-timeout':
       return `${terminalTextStyles.error('[ERROR]')} CloudCLI did not come up within ${Math.round(timeoutMs / 1000)}s.`;
+    case 'unstable':
+      return `${terminalTextStyles.error('[ERROR]')} CloudCLI answered a health check once, then disappeared before it could be confirmed. Check status; it may not be running.`;
   }
 }
 
@@ -132,6 +149,8 @@ function describeRestartOutcome(result: RuntimeRestartResult, timeoutMs: number)
       return `${terminalTextStyles.error('[ERROR]')} CloudCLI did not come back within ${Math.round(timeoutMs / 1000)}s.`;
     case 'same-instance':
       return `${terminalTextStyles.error('[ERROR]')} The previous CloudCLI is still running; the restart did not take effect.`;
+    case 'unstable':
+      return `${terminalTextStyles.error('[ERROR]')} CloudCLI answered a health check once, then disappeared before it could be confirmed. Check status; it may not be running.`;
   }
 }
 
@@ -139,20 +158,27 @@ function showRuntimeHelp(output: CliOutput): void {
   output.log(`
 Usage:
   cloudcli runtime status  [--json]
-  cloudcli runtime start   [--json] [--timeout <ms>]
+  cloudcli runtime start   [--json] [--timeout <ms>] [--stability-checks <n>] [--stability-interval <ms>]
   cloudcli runtime stop    [--json] [--timeout <ms>]
-  cloudcli runtime restart [--json] [--timeout <ms>]
+  cloudcli runtime restart [--json] [--timeout <ms>] [--stability-checks <n>] [--stability-interval <ms>]
 
   status   Report the runtime state. Always exits 0; the state is in the output.
   start    Launch the runtime detached from this process, and confirm it became
-           healthy. A no-op if it is already online. Does not build; run
-           "npm run build" first if you changed server code. Exits 0 on success,
-           1 otherwise.
+           healthy and stayed up. A no-op if it is already online. Does not build;
+           run "npm run build" first if you changed server code. Exits 0 on
+           success, 1 otherwise.
   stop     Gracefully stop the runtime this installation started.
            Exits 0 once stopped, 1 otherwise.
   restart  Stop, then start a replacement detached from this process, and confirm
-           a different instance answered. Does not build; run "npm run build" first
-           if you changed server code. Exits 0 on success, 1 otherwise.
+           a different instance answered and stayed up. Does not build; run
+           "npm run build" first if you changed server code. Exits 0 on success,
+           1 otherwise.
+
+  --stability-checks <n>     How many extra observations must agree before a
+                              first healthy reading counts as started/restarted
+                              (default 2). Start/restart only.
+  --stability-interval <ms>  Spacing between those observations (default 500).
+                              Start/restart only.
 `);
 }
 
@@ -181,10 +207,15 @@ export function createRuntimeCommandService(
       }
 
       if (parsed.subcommand === 'start') {
-        const timeoutMs = Number.isInteger(parsed.timeoutMs) && parsed.timeoutMs! > 0
-          ? parsed.timeoutMs
-          : undefined;
-        const result = await dependencies.startService.start({ fallbackHealthUrl, timeoutMs });
+        const timeoutMs = positiveIntOrUndefined(parsed.timeoutMs);
+        const stabilityChecks = positiveIntOrUndefined(parsed.stabilityChecks);
+        const stabilityIntervalMs = positiveIntOrUndefined(parsed.stabilityIntervalMs);
+        const result = await dependencies.startService.start({
+          fallbackHealthUrl,
+          timeoutMs,
+          stabilityChecks,
+          stabilityIntervalMs,
+        });
         if (parsed.json) {
           output.log(JSON.stringify(result));
         } else {
@@ -194,9 +225,7 @@ export function createRuntimeCommandService(
       }
 
       if (parsed.subcommand === 'stop') {
-        const timeoutMs = Number.isInteger(parsed.timeoutMs) && parsed.timeoutMs! > 0
-          ? parsed.timeoutMs
-          : undefined;
+        const timeoutMs = positiveIntOrUndefined(parsed.timeoutMs);
         const result = await controller.stop({ fallbackHealthUrl, timeoutMs });
         if (parsed.json) {
           output.log(JSON.stringify(result));
@@ -207,10 +236,15 @@ export function createRuntimeCommandService(
       }
 
       if (parsed.subcommand === 'restart') {
-        const timeoutMs = Number.isInteger(parsed.timeoutMs) && parsed.timeoutMs! > 0
-          ? parsed.timeoutMs
-          : undefined;
-        const result = await dependencies.restartService.restart({ fallbackHealthUrl, timeoutMs });
+        const timeoutMs = positiveIntOrUndefined(parsed.timeoutMs);
+        const stabilityChecks = positiveIntOrUndefined(parsed.stabilityChecks);
+        const stabilityIntervalMs = positiveIntOrUndefined(parsed.stabilityIntervalMs);
+        const result = await dependencies.restartService.restart({
+          fallbackHealthUrl,
+          timeoutMs,
+          stabilityChecks,
+          stabilityIntervalMs,
+        });
         if (parsed.json) {
           output.log(JSON.stringify(result));
         } else {

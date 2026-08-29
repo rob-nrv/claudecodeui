@@ -5,6 +5,7 @@
 // launch + poll-for-verified-identity shape, without touching restart's
 // tested stop-then-replace path.
 import type { RuntimeController } from './runtime-controller.service.js';
+import { confirmStableOnline } from './runtime-stability.js';
 import type { RuntimeStatus } from './runtime-status.js';
 
 export type RuntimeStartOutcome =
@@ -19,7 +20,9 @@ export type RuntimeStartOutcome =
   /** The replacement could not be launched at all. */
   | 'launch-failed'
   /** Launched, but nothing became healthy before the deadline. */
-  | 'start-timeout';
+  | 'start-timeout'
+  /** Answered a health check once, then disappeared or changed identity before confirmation. */
+  | 'unstable';
 
 export type RuntimeStartResult = {
   outcome: RuntimeStartOutcome;
@@ -42,6 +45,9 @@ export type RuntimeStartOptions = {
   /** Deadline for the new instance to answer a health check. */
   timeoutMs?: number;
   pollIntervalMs?: number;
+  /** How many extra observations must agree before a first ONLINE reading counts as started. */
+  stabilityChecks?: number;
+  stabilityIntervalMs?: number;
 };
 
 /** Same sizing as restart: a cold proot/Termux boot, module load plus migrations. */
@@ -94,7 +100,25 @@ export function createRuntimeStartService(dependencies: RuntimeStartDependencies
           { kind: 'start', since, deadlineMs: timeoutMs },
         );
         if (latest.state === 'online') {
-          return { outcome: 'started', newInstanceId: latest.instanceId, status: latest, launchError: null };
+          // One ONLINE reading also describes a process that answers /health
+          // once and is gone a moment later — a detached child that lost its
+          // session, or crashed right after listen(). Re-observe it before
+          // calling this STARTED.
+          const confirmation = await confirmStableOnline(
+            latest,
+            {
+              status: () => controller.status(
+                { fallbackHealthUrl },
+                { kind: 'start', since, deadlineMs: timeoutMs },
+              ),
+              wait: dependencies.wait,
+            },
+            { checks: options.stabilityChecks, intervalMs: options.stabilityIntervalMs },
+          );
+          if (!confirmation.stable) {
+            return { outcome: 'unstable', newInstanceId: null, status: confirmation.status, launchError: null };
+          }
+          return { outcome: 'started', newInstanceId: confirmation.status.instanceId, status: confirmation.status, launchError: null };
         }
       }
 
