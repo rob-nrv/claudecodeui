@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="32dp">
+
+    <TextView
+        android:id="@+id/stateLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="14sp"
+        android:letterSpacing="0.1"
+        android:textAllCaps="true"
+        android:textStyle="bold"
+        tools:text="OFFLINE" />
+
+    <TextView
+        android:id="@+id/messageText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:textSize="16sp"
+        tools:text="CloudCLI is not running." />
+
+    <LinearLayout
+        android:id="@+id/progressRow"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="12dp"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/progressSpinner"
+            style="?android:attr/progressBarStyleSmall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:indeterminate="true" />
+
+        <TextView
+            android:id="@+id/progressText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textSize="14sp"
+            tools:text="Launching CloudCLI server…" />
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/checklist"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="20dp"
+        android:visibility="gone">
+
+        <TextView android:id="@+id/step1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="4dp" />
+        <TextView android:id="@+id/step2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="4dp" />
+        <TextView android:id="@+id/step3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="4dp" />
+        <TextView android:id="@+id/step4" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/primaryAction"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        tools:text="Start CloudCLI" />
+
+    <Button
+        android:id="@+id/secondaryAction"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/action_stop"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/detailsText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:textSize="12sp"
+        android:fontFamily="monospace"
+        android:visibility="gone"
+        tools:text="details" />
+
+</LinearLayout>

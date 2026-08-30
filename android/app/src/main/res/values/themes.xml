@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Deliberately the stock Material theme, no palette or type scale of our
+         own — this app is not a preview of CloudCLI's visual direction, and
+         `docs/mobile-north-star` owns that decision for the actual product UI. -->
+    <style name="Theme.CloudCliRuntimeController" parent="Theme.MaterialComponents.DayNight.DarkActionBar" />
+</resources>

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CloudCLI Runtime</string>
+
+    <string name="state_checking">CHECKING</string>
+    <string name="state_offline">OFFLINE</string>
+    <string name="state_starting">STARTING</string>
+    <string name="state_online">ONLINE</string>
+    <string name="state_error">ERROR</string>
+    <string name="state_stopping">STOPPING</string>
+
+    <string name="message_checking">Checking runtime state…</string>
+    <string name="message_offline">CloudCLI is not running.</string>
+    <string name="message_starting">Starting CloudCLI…</string>
+    <string name="message_online">CloudCLI is ready.</string>
+    <string name="message_stopping">Stopping CloudCLI…</string>
+
+    <string name="progress_runtime_available">Checking Termux…</string>
+    <string name="progress_linux_environment">Reaching Linux environment…</string>
+    <string name="progress_cloudcli_server">Launching CloudCLI server…</string>
+    <string name="progress_health_check">Checking health…</string>
+
+    <string name="action_start">Start CloudCLI</string>
+    <string name="action_open">Open CloudCLI</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_details">Details</string>
+    <string name="action_settings">Settings</string>
+
+    <string name="step_runtime_available">Runtime available</string>
+    <string name="step_linux_environment">Linux environment</string>
+    <string name="step_cloudcli_server">CloudCLI server</string>
+    <string name="step_health_check">Health check</string>
+
+    <string name="settings_title">CloudCLI location</string>
+    <string name="settings_distro_label">proot-distro name</string>
+    <string name="settings_distro_hint">ubuntu</string>
+    <string name="settings_username_label">Linux user</string>
+    <string name="settings_username_hint">the user CloudCLI runs as inside that distro</string>
+    <string name="settings_repo_path_label">CloudCLI checkout path</string>
+    <string name="settings_repo_path_hint">e.g. ~/projects/claudecodeui</string>
+    <string name="settings_port_label">Server port</string>
+    <string name="settings_port_hint">3001</string>
+    <string name="settings_save">Save</string>
+</resources>
