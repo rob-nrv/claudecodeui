@@ -79,6 +79,7 @@
     "arrowUp": "向上箭頭",
     "arrowDown": "向下箭頭",
     "scrollDown": "捲動到底部",
+    "backToLive": "返回即時輸出",
     "handle": {
       "closePanel": "關閉快速鍵面板",
       "openPanel": "開啟快速鍵面板"

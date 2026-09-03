@@ -79,6 +79,7 @@
     "arrowUp": "Yukarı Ok",
     "arrowDown": "Aşağı Ok",
     "scrollDown": "Aşağı Kaydır",
+    "backToLive": "Canlı görünüme dön",
     "handle": {
       "closePanel": "Kısayol panelini kapat",
       "openPanel": "Kısayol panelini aç"

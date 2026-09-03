@@ -96,6 +96,7 @@
     "arrowUp": "Arrow Up",
     "arrowDown": "Arrow Down",
     "scrollDown": "Scroll Down",
+    "backToLive": "Back to live",
     "handle": {
       "closePanel": "Close shortcuts panel",
       "openPanel": "Open shortcuts panel"

@@ -12,6 +12,7 @@ import {
   SHELL_RESTART_DELAY_MS,
 } from '../constants/constants';
 import { useShellRuntime } from '../hooks/useShellRuntime';
+import { isTerminalScrolledBack } from '../utils/terminalLiveState';
 import { sendSocketMessage } from '../utils/socket';
 import { getSessionDisplayName } from '../utils/auth';
 
@@ -48,6 +49,7 @@ export default function Shell({
 }: ShellProps) {
   const { t } = useTranslation('chat');
   const [isRestarting, setIsRestarting] = useState(false);
+  const [isScrolledBack, setIsScrolledBack] = useState(false);
   const [cliPromptOptions, setCliPromptOptions] = useState<CliPromptOption[] | null>(null);
   const promptCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -176,6 +178,30 @@ export default function Shell({
     };
   }, [isActive, isConnected, isInitialized, terminalRef]);
 
+  // Live vs. scrolled-back is re-read from the xterm buffer on every scroll and
+  // render instead of being mirrored into React state, so the indicator can
+  // never drift from the position the terminal is actually showing. New output
+  // arriving while the user is scrolled back leaves `viewportY` where it is, so
+  // the reading position — and this flag — simply stay put.
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!isInitialized || !terminal) {
+      setIsScrolledBack(false);
+      return;
+    }
+
+    const syncScrollState = () => {
+      setIsScrolledBack(isTerminalScrolledBack(terminal));
+    };
+
+    syncScrollState();
+    const subscriptions = [terminal.onScroll(syncScrollState), terminal.onRender(syncScrollState)];
+
+    return () => {
+      subscriptions.forEach((subscription) => subscription.dispose());
+    };
+  }, [isInitialized, terminalRef]);
+
   const sendInput = useCallback(
     (data: string) => {
       sendSocketMessage(wsRef.current, { type: 'input', data });
@@ -247,6 +273,7 @@ export default function Shell({
           wsRef={wsRef}
           terminalRef={terminalRef}
           isConnected={isConnected}
+          isScrolledBack={isScrolledBack}
           bottomOffset="bottom-0"
         />
       </>
@@ -350,6 +377,7 @@ export default function Shell({
         wsRef={wsRef}
         terminalRef={terminalRef}
         isConnected={isConnected}
+        isScrolledBack={isScrolledBack}
       />
 
     </div>

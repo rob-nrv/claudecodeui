@@ -79,6 +79,7 @@
     "arrowUp": "Flèche haut",
     "arrowDown": "Flèche bas",
     "scrollDown": "Défiler vers le bas",
+    "backToLive": "Revenir au direct",
     "handle": {
       "closePanel": "Fermer le panneau de raccourcis",
       "openPanel": "Ouvrir le panneau de raccourcis"

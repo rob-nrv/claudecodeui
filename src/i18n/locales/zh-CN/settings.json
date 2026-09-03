@@ -96,6 +96,7 @@
     "arrowUp": "上箭头",
     "arrowDown": "下箭头",
     "scrollDown": "滚动到底部",
+    "backToLive": "返回实时输出",
     "handle": {
       "closePanel": "关闭快捷键面板",
       "openPanel": "打开快捷键面板"

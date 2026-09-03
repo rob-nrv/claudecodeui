@@ -2,6 +2,21 @@ import type { IDisposable, Terminal } from '@xterm/xterm';
 
 import { copyTextToClipboard } from '../../../utils/clipboard';
 
+import {
+  SCROLL_INERTIA_FRICTION,
+  SCROLL_INERTIA_MAX_VELOCITY,
+  SCROLL_INERTIA_MIN_VELOCITY,
+  TouchScrollVelocityTracker,
+  shouldReclaimGestureForScroll,
+  shouldStartInertia,
+} from './terminalTouchScroll';
+import { resolveContextMenuAction } from './terminalSelectionRecovery';
+import {
+  type TouchScrollRoute,
+  WheelStepAccumulator,
+  resolveTouchScrollRoute,
+} from './terminalWheelBridge';
+
 type TerminalCoords = {
   col: number;
   row: number;
@@ -21,6 +36,14 @@ type DragHandle = 'start' | 'end';
 
 type TerminalWithRenderService = Terminal & {
   _core?: {
+    // xterm exposes neither the live mouse protocol state nor the measured
+    // cell box on its public API, and both are needed to decide whether a
+    // gesture must become a wheel event and how tall one step is. The shape is
+    // probed at runtime so an internal rename degrades to "no bridge" instead
+    // of throwing.
+    coreMouseService?: {
+      areMouseEventsActive?: boolean;
+    };
     _renderService?: {
       dimensions?: {
         css?: {
@@ -48,13 +71,6 @@ const CONTEXT_MENU_EDGE_PADDING_PX = 8;
 const ZOOM_THROTTLE_MS = 50;
 const DEFAULT_MIN_FONT_SIZE = 8;
 const DEFAULT_MAX_FONT_SIZE = 48;
-// xterm scrolls the viewport 1:1 with the finger and never coasts, so we add
-// our own inertial (fling) scrolling: track finger velocity during the drag and
-// keep scrolling with friction after release.
-const SCROLL_INERTIA_FRICTION = 0.95; // velocity multiplier per ~16ms frame
-const SCROLL_INERTIA_MIN_VELOCITY = 0.02; // px/ms below which coasting stops
-const SCROLL_INERTIA_MAX_VELOCITY = 5; // px/ms cap to avoid runaway flings
-const SCROLL_INERTIA_MAX_IDLE_MS = 90; // ignore a flick if the finger paused before lifting
 
 type ContextMenuItem = {
   label: string;
@@ -109,6 +125,9 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
   private tapHoldTimeout: number | null = null;
   private cellDimensions: CellDimensions = { width: 0, height: 0 };
   private isContextMenuVisible = false;
+  // A finger is down on the terminal. Tracked separately from `touchStart`,
+  // which a mid-gesture selection reset clears while the finger is still down.
+  private hasActiveTouch = false;
 
   private readonly minFontSize: number;
   private readonly maxFontSize: number;
@@ -119,10 +138,23 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
   private lastZoomTime = 0;
 
   private viewportElement: HTMLElement | null = null;
-  private lastScrollTouchY: number | null = null;
-  private lastScrollTouchTime = 0;
-  private scrollVelocity = 0;
+  private readonly scrollTracker = new TouchScrollVelocityTracker();
+  // True once the current touch is being treated as a scrollback drag, so a
+  // release only coasts when the finger was actually scrolling.
+  private isTouchScrolling = false;
+  // When the live selection came from a long-press, the moment it appeared.
+  private longPressSelectionAt: number | null = null;
   private inertiaFrame: number | null = null;
+
+  private readonly wheelAccumulator = new WheelStepAccumulator();
+  // clientY of the last move already converted into wheel steps, so the bridge
+  // works on per-move travel while `touchStart` keeps measuring the gesture.
+  private lastWheelY: number | null = null;
+  // Where the finger last was, reused as the report coordinates while coasting.
+  private lastWheelX: number | null = null;
+  // True once this gesture has been handed to the wheel bridge, so the release
+  // coasts the application instead of a viewport that cannot move.
+  private isWheelGesture = false;
 
   constructor(
     terminal: Terminal,
@@ -294,6 +326,13 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     this.endHandle.addEventListener('touchcancel', this.onHandleTouchEnd, { passive: false });
 
     document.addEventListener('touchstart', this.onDocumentTouchStart, { passive: true });
+    // On the container rather than the xterm element: it also covers the
+    // selection overlay and its menu buttons, which are siblings of the
+    // terminal, not children of it.
+    this.terminalContent.addEventListener('contextmenu', this.onTerminalContextMenu, {
+      capture: true,
+      passive: false,
+    });
 
     this.disposables.push(
       this.terminal.onSelectionChange(this.onSelectionChange),
@@ -303,6 +342,8 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
   }
 
   private onTerminalTouchStart = (event: TouchEvent): void => {
+    this.hasActiveTouch = true;
+
     this.cancelInertia();
     this.resetScrollTracking();
 
@@ -355,6 +396,12 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
       this.pendingClearTouch.moved =
         this.pendingClearTouch.moved ||
         getDistance(this.pendingClearTouch.point, touch) > MOVE_THRESHOLD_PX;
+
+      // Dragging across an existing selection scrolls (xterm moves the
+      // viewport); sample it so the release can coast like any other drag.
+      if (this.pendingClearTouch.moved && !this.isHandleDragging) {
+        this.trackScrollSample(touch);
+      }
       return;
     }
 
@@ -367,6 +414,14 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
       this.clearTapHoldTimeout();
     }
 
+    // A long-press fires after 600ms of near-stillness, which is also what a
+    // finger resting on the screen before a scroll looks like. If that press
+    // is immediately followed by a clearly vertical drag, the user was
+    // scrolling: give the gesture back instead of dragging a selection along.
+    if (this.shouldTakeGestureBackForScroll(touchStart, touch)) {
+      this.takeGestureBackForScroll(touchStart);
+    }
+
     if (this.isSelecting && !this.isHandleDragging) {
       event.preventDefault();
       this.extendSelection(touch);
@@ -375,10 +430,13 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
 
     // Plain one-finger scrolling: xterm moves the viewport itself; we only
     // record the finger velocity so we can add inertia when the touch ends.
-    this.recordScrollSample(touch);
+    this.trackScrollSample(touch);
+    this.bridgeMoveToWheel(event, touchStart, touch);
   };
 
   private onTerminalTouchEnd = (event: TouchEvent): void => {
+    this.hasActiveTouch = event.touches.length > 0;
+
     if (this.isPinching) {
       this.endPinchZoom();
       return;
@@ -396,27 +454,45 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
       this.blurTerminalInput();
     }
 
-    if (!this.pendingClearTouch) {
-      this.maybeStartInertia();
-      return;
-    }
-
-    const shouldClear = this.isSelecting && !this.pendingClearTouch.moved && !this.isHandleDragging;
+    const pendingClearTouch = this.pendingClearTouch;
     this.pendingClearTouch = null;
+
+    const shouldClear =
+      pendingClearTouch !== null &&
+      this.isSelecting &&
+      !pendingClearTouch.moved &&
+      !this.isHandleDragging;
 
     if (shouldClear) {
       this.clearSelection();
+    } else {
+      this.maybeStartInertia();
     }
+
+    this.isTouchScrolling = false;
   };
 
   private onTerminalTouchCancel = (): void => {
+    this.hasActiveTouch = false;
+
     if (this.isPinching) {
       this.endPinchZoom();
     }
 
-    this.clearTapHoldTimeout();
+    // The pending long-press is deliberately left running. Chrome cancels the
+    // touch as it consumes a long-press, and clearing the timer here is what
+    // silently killed the selector on the Pixel: the gesture the user just
+    // made is exactly the one we were waiting for. A press that had moved
+    // already cleared the timer in `onTerminalTouchMove`, and a two-finger
+    // gesture cleared it in `onTerminalTouchStart`, so anything still pending
+    // here is a stationary press — the one case where completing it is right.
+    // `contextmenu` normally gets there first and clears it; this is the
+    // fallback for devices that cancel without raising one.
     this.touchStart = null;
     this.pendingClearTouch = null;
+    // A cancelled touch never released, so it must not leave a coast behind.
+    this.cancelInertia();
+    this.resetScrollTracking();
   };
 
   private onHandleTouchStart = (event: TouchEvent): void => {
@@ -431,6 +507,8 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     this.dragHandle = target.dataset.handleType === 'start' ? 'start' : 'end';
     this.isHandleDragging = true;
     this.pendingClearTouch = null;
+    this.cancelInertia();
+    this.resetScrollTracking();
   };
 
   private onHandleTouchMove = (event: TouchEvent): void => {
@@ -470,6 +548,52 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     event.stopPropagation();
     this.isHandleDragging = false;
     this.dragHandle = null;
+  };
+
+  /**
+   * Turns the platform's long-press into CloudCLI's own selection.
+   *
+   * Chrome raises `contextmenu` about 100ms before our 600ms timer would fire
+   * and then cancels the touch, which clears that timer — so on a real device
+   * this event, not the timer, is when a long-press is actually known to have
+   * happened. Acting on it here is what puts the selector back; merely
+   * blocking the event removed the last thing that was still drawing anything.
+   *
+   * `stopPropagation` from the capture phase keeps xterm's `rightClickHandler`
+   * from running, which would otherwise park its focused helper textarea under
+   * the finger and let the platform offer Paste over our menu. Nothing is lost
+   * by refusing it: `rightClickSelectsWord` is false off macOS, so on Android
+   * it only ever moved and focused that textarea, and the shortcuts panel owns
+   * the real Paste.
+   */
+  private onTerminalContextMenu = (event: Event): void => {
+    const pointerType =
+      typeof PointerEvent !== 'undefined' && event instanceof PointerEvent
+        ? event.pointerType
+        : null;
+
+    const action = resolveContextMenuAction({
+      pointerType,
+      hasActiveTouch: this.hasActiveTouch,
+      isSelecting: this.isSelecting,
+    });
+
+    if (action === 'ignore') {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (action !== 'suppress-and-select' || !(event instanceof MouseEvent)) {
+      return;
+    }
+
+    // The timer lost the race and is about to be cancelled with the touch;
+    // drop it so it cannot fire a second selection if this device does not
+    // cancel after all.
+    this.clearTapHoldTimeout();
+    this.startSelection({ clientX: event.clientX, clientY: event.clientY });
   };
 
   private onSelectionChange = (): void => {
@@ -516,6 +640,7 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     this.selectionStart = wordBounds?.start ?? coords;
     this.selectionEnd = wordBounds?.end ?? coords;
     this.isSelecting = true;
+    this.longPressSelectionAt = performance.now();
 
     // Dismiss the mobile keyboard if it was open: selecting text is not typing.
     this.blurTerminalInput();
@@ -675,6 +800,7 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     this.selectionStart = null;
     this.selectionEnd = null;
     this.isSelecting = true;
+    this.longPressSelectionAt = null;
     this.hideHandles();
 
     if (this.terminal.hasSelection()) {
@@ -745,46 +871,171 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
   }
 
   private resetScrollTracking(): void {
-    this.lastScrollTouchY = null;
-    this.lastScrollTouchTime = 0;
-    this.scrollVelocity = 0;
+    this.scrollTracker.reset();
+    this.isTouchScrolling = false;
+    this.resetWheelBridge();
   }
 
-  private recordScrollSample(touch: TouchCoords): void {
-    const now = performance.now();
+  /**
+   * Drops any sub-row travel the bridge was still holding.
+   *
+   * Called when a gesture starts or is cancelled, and whenever the route
+   * changes mid-drag, so travel measured against a TUI can never be replayed
+   * into a terminal that has since gone back to a normal scrollback.
+   */
+  private resetWheelBridge(): void {
+    this.wheelAccumulator.reset();
+    this.lastWheelY = null;
+    this.lastWheelX = null;
+    this.isWheelGesture = false;
+  }
 
-    if (this.lastScrollTouchY !== null) {
-      const dt = now - this.lastScrollTouchTime;
-      if (dt > 0) {
-        // Positive when the finger moves up, matching how xterm increases
-        // scrollTop, so the inertia continues in the same direction.
-        const velocity = (this.lastScrollTouchY - touch.clientY) / dt;
-        this.scrollVelocity = this.scrollVelocity * 0.4 + velocity * 0.6;
+  private trackScrollSample(touch: TouchCoords): void {
+    this.isTouchScrolling = true;
+    this.scrollTracker.add(touch.clientY, performance.now());
+  }
+
+  private areMouseEventsActive(): boolean {
+    const core = (this.terminal as TerminalWithRenderService)._core;
+    return core?.coreMouseService?.areMouseEventsActive === true;
+  }
+
+  private getCellHeight(): number {
+    if (!this.cellDimensions.height) {
+      this.updateCellDimensions();
+    }
+    return this.cellDimensions.height;
+  }
+
+  private getTouchScrollRoute(start: TouchCoords, touch: TouchCoords): TouchScrollRoute {
+    const buffer = this.terminal.buffer?.active;
+
+    return resolveTouchScrollRoute({
+      mouseEventsActive: this.areMouseEventsActive(),
+      bufferType: buffer?.type ?? 'normal',
+      baseY: buffer?.baseY ?? 0,
+      isSelecting: this.isSelecting,
+      isHandleDragging: this.isHandleDragging,
+      isPinching: this.isPinching,
+      dx: touch.clientX - start.clientX,
+      dy: touch.clientY - start.clientY,
+    });
+  }
+
+  /**
+   * Converts the newest slice of a drag into wheel steps when the viewport
+   * cannot serve the gesture itself.
+   *
+   * `preventDefault` matters here: the drag would otherwise still be handed to
+   * the browser, which answers a scroll on an unscrollable element with the
+   * overscroll glow — the finger would feel like it hit a wall while the
+   * application scrolls underneath it.
+   */
+  private bridgeMoveToWheel(event: TouchEvent, start: TouchCoords, touch: TouchCoords): void {
+    if (this.getTouchScrollRoute(start, touch) !== 'wheel') {
+      if (this.isWheelGesture) {
+        this.resetWheelBridge();
       }
+      return;
     }
 
-    this.lastScrollTouchY = touch.clientY;
-    this.lastScrollTouchTime = now;
+    event.preventDefault();
+    this.isWheelGesture = true;
+
+    const previousY = this.lastWheelY ?? start.clientY;
+    this.lastWheelY = touch.clientY;
+    this.lastWheelX = touch.clientX;
+
+    this.dispatchWheelSteps(
+      this.wheelAccumulator.takeSteps(touch.clientY - previousY, this.getCellHeight()),
+      touch,
+    );
+  }
+
+  /**
+   * Hands whole wheel steps to xterm's own wheel listener on
+   * `terminal.element`.
+   *
+   * Each step is a separate event of exactly one row, because xterm reports one
+   * wheel action per event and divides the delta by its own row height to
+   * decide whether the event counts at all. Routing through that listener is
+   * the point of the bridge: xterm already turns the event into a mouse report
+   * while tracking is on, into cursor keys in an alt buffer without it, and
+   * into a viewport scroll otherwise, so CloudCLI never encodes a sequence of
+   * its own or has to know which mode the application is in.
+   */
+  private dispatchWheelSteps(steps: number, at: TouchCoords): void {
+    const element = this.terminal.element;
+    const cellHeight = this.getCellHeight();
+    if (!element || steps === 0 || !cellHeight) {
+      return;
+    }
+
+    // Negative deltaY is wheel-up, which xterm reports as "back in history".
+    const deltaY = steps > 0 ? cellHeight : -cellHeight;
+
+    for (let index = 0; index < Math.abs(steps); index += 1) {
+      element.dispatchEvent(
+        new WheelEvent('wheel', {
+          deltaY,
+          deltaMode: 0, // DOM_DELTA_PIXEL: xterm divides by its own row height.
+          clientX: at.clientX,
+          clientY: at.clientY,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+  }
+
+  private shouldTakeGestureBackForScroll(start: TouchCoords, touch: TouchCoords): boolean {
+    return shouldReclaimGestureForScroll({
+      isSelecting: this.isSelecting,
+      isTouchScrolling: this.isTouchScrolling,
+      isHandleDragging: this.isHandleDragging,
+      isPinching: this.isPinching,
+      dx: touch.clientX - start.clientX,
+      dy: touch.clientY - start.clientY,
+      msSinceLongPressSelection:
+        this.longPressSelectionAt === null
+          ? null
+          : performance.now() - this.longPressSelectionAt,
+    });
+  }
+
+  private takeGestureBackForScroll(start: TouchCoords): void {
+    // Drops the mis-fired selection; `clearSelection` also wipes the in-flight
+    // touch bookkeeping, so the still-pressed finger has to be re-anchored.
+    this.clearSelection();
+    this.touchStart = start;
+    this.scrollTracker.reset();
+    this.isTouchScrolling = true;
   }
 
   private maybeStartInertia(): void {
-    if (this.isSelecting || this.isHandleDragging || this.isPinching) {
+    const velocity = this.scrollTracker.releaseVelocity(performance.now());
+
+    if (
+      !shouldStartInertia({
+        isTouchScrolling: this.isTouchScrolling,
+        isHandleDragging: this.isHandleDragging,
+        isPinching: this.isPinching,
+        velocity,
+      })
+    ) {
       return;
     }
 
-    const idle = performance.now() - this.lastScrollTouchTime;
-    if (idle > SCROLL_INERTIA_MAX_IDLE_MS) {
-      return;
-    }
-
-    if (Math.abs(this.scrollVelocity) < SCROLL_INERTIA_MIN_VELOCITY) {
-      return;
-    }
-
-    this.startInertia(this.scrollVelocity);
+    this.startInertia(velocity);
   }
 
   private startInertia(initialVelocity: number): void {
+    if (this.isWheelGesture) {
+      this.startWheelInertia(initialVelocity);
+      return;
+    }
+
     const viewport = this.getViewportElement();
     if (!viewport) {
       return;
@@ -816,6 +1067,47 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
         this.inertiaFrame = null;
         return;
       }
+
+      this.inertiaFrame = window.requestAnimationFrame(step);
+    };
+
+    this.inertiaFrame = window.requestAnimationFrame(step);
+  }
+
+  /**
+   * Coasts a bridged gesture by feeding the decaying velocity back through the
+   * same accumulator the drag used.
+   *
+   * Reusing the friction curve and the step budget of the drag is what keeps
+   * the release feeling like one continuous movement; because the accumulator
+   * caps each frame and drops the surplus, a hard fling decays into a bounded
+   * number of wheel reports rather than a burst the application has to chew
+   * through after the finger is long gone.
+   */
+  private startWheelInertia(initialVelocity: number): void {
+    this.cancelInertia();
+
+    let velocity = clamp(
+      initialVelocity,
+      -SCROLL_INERTIA_MAX_VELOCITY,
+      SCROLL_INERTIA_MAX_VELOCITY,
+    );
+    let lastFrame = performance.now();
+    const at = { clientX: this.lastWheelX ?? 0, clientY: this.lastWheelY ?? 0 };
+
+    const step = (now: number): void => {
+      const dt = Math.max(1, now - lastFrame);
+      lastFrame = now;
+      velocity *= Math.pow(SCROLL_INERTIA_FRICTION, dt / 16);
+
+      if (Math.abs(velocity) < SCROLL_INERTIA_MIN_VELOCITY || !this.areMouseEventsActive()) {
+        this.inertiaFrame = null;
+        return;
+      }
+
+      // The tracker's sign is "positive when the finger moved up", which is the
+      // opposite of the downward-positive travel the accumulator expects.
+      this.dispatchWheelSteps(this.wheelAccumulator.takeSteps(-velocity * dt, this.getCellHeight()), at);
 
       this.inertiaFrame = window.requestAnimationFrame(step);
     };
@@ -877,6 +1169,7 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     this.dragHandle = null;
     this.selectionStart = null;
     this.selectionEnd = null;
+    this.longPressSelectionAt = null;
     this.pendingClearTouch = null;
     this.touchStart = null;
     this.hideHandles();
@@ -1044,6 +1337,9 @@ class ShellMobileSelectionCore implements MobileTerminalSelectionManager {
     this.endHandle.removeEventListener('touchcancel', this.onHandleTouchEnd);
 
     document.removeEventListener('touchstart', this.onDocumentTouchStart);
+    this.terminalContent.removeEventListener('contextmenu', this.onTerminalContextMenu, {
+      capture: true,
+    });
     this.disposables.forEach((disposable) => disposable.dispose());
     this.disposables.length = 0;
 

@@ -96,6 +96,7 @@
     "arrowUp": "위쪽 화살표",
     "arrowDown": "아래쪽 화살표",
     "scrollDown": "아래로 스크롤",
+    "backToLive": "실시간으로 돌아가기",
     "handle": {
       "closePanel": "단축키 패널 닫기",
       "openPanel": "단축키 패널 열기"

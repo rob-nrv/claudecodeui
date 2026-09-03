@@ -40,6 +40,8 @@ type TerminalShortcutsPanelProps = {
   wsRef: MutableRefObject<WebSocket | null>;
   terminalRef: MutableRefObject<Terminal | null>;
   isConnected: boolean;
+  /** Terminal is parked in the scrollback rather than following live output. */
+  isScrolledBack?: boolean;
   bottomOffset?: string;
 };
 
@@ -51,11 +53,14 @@ const KEY_BTN_ACTIVE =
   'shrink-0 rounded-md border border-blue-500 bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors select-none disabled:cursor-not-allowed disabled:opacity-40';
 const ICON_BTN =
   'shrink-0 rounded-md border border-gray-600 bg-gray-700 p-1.5 text-gray-100 transition-colors select-none active:bg-blue-600 active:text-white active:border-blue-600 disabled:cursor-not-allowed disabled:opacity-40';
+const ICON_BTN_ACTIVE =
+  'shrink-0 rounded-md border border-blue-500 bg-blue-600 p-1.5 text-white transition-colors select-none disabled:cursor-not-allowed disabled:opacity-40';
 
 export default function TerminalShortcutsPanel({
   wsRef,
   terminalRef,
   isConnected,
+  isScrolledBack = false,
   bottomOffset = 'bottom-0',
 }: TerminalShortcutsPanelProps) {
   const { t } = useTranslation('settings');
@@ -87,6 +92,14 @@ export default function TerminalShortcutsPanel({
       // Ignore clipboard permission errors.
     }
   }, [sendInput]);
+
+  // Highlighting the existing scroll-to-bottom control is the whole "back to
+  // live" affordance: while the user is parked in the scrollback it reads as
+  // an action to take, and it returns to its resting state once the terminal
+  // is following live output again.
+  const backToLiveLabel = isScrolledBack
+    ? t('terminalShortcuts.backToLive')
+    : t('terminalShortcuts.scrollDown');
 
   const handleKeyPress = useCallback(
     (seq: string) => {
@@ -180,9 +193,9 @@ export default function TerminalShortcutsPanel({
           onPointerDown={preventFocusSteal}
           onClick={scrollToBottom}
           disabled={!isConnected}
-          className={ICON_BTN}
-          title={t('terminalShortcuts.scrollDown')}
-          aria-label={t('terminalShortcuts.scrollDown')}
+          className={isScrolledBack ? ICON_BTN_ACTIVE : ICON_BTN}
+          title={backToLiveLabel}
+          aria-label={backToLiveLabel}
         >
           <ArrowDownToLine className="h-4 w-4" />
         </button>

@@ -79,6 +79,7 @@
     "arrowUp": "上矢印",
     "arrowDown": "下矢印",
     "scrollDown": "下にスクロール",
+    "backToLive": "ライブに戻る",
     "handle": {
       "closePanel": "ショートカットパネルを閉じる",
       "openPanel": "ショートカットパネルを開く"

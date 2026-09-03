@@ -96,6 +96,7 @@
     "arrowUp": "Flecha arriba",
     "arrowDown": "Flecha abajo",
     "scrollDown": "Desplazar hacia abajo",
+    "backToLive": "Volver al directo",
     "handle": {
       "closePanel": "Cerrar panel de atajos",
       "openPanel": "Abrir panel de atajos"
