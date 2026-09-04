@@ -141,6 +141,12 @@ export const api = {
     }),
     refresh: () => authenticatedFetch('/api/auth/refresh', { method: 'POST' }),
     user: () => authenticatedFetch('/api/auth/user'),
+    // Presentational display name only; passing null/'' clears the override
+    // and falls the UI back to the registered username.
+    updateProfile: (displayName) => authenticatedFetch('/api/auth/user/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ displayName }),
+    }),
     logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
   },
 

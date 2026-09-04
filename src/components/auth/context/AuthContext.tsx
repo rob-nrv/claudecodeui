@@ -21,7 +21,12 @@ import type {
 } from '../types';
 import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+/**
+ * Exported so identity helpers can read the signed-in user without forcing an
+ * `AuthProvider` on every consumer (`useAppUserIdentity` degrades to a generic
+ * fallback outside a provider instead of throwing).
+ */
+export const AuthContext = createContext<AuthContextValue | null>(null);
 
 const readStoredToken = (): string | null => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
 
@@ -81,6 +86,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const refreshOnboardingStatus = useCallback(async () => {
     await checkOnboardingStatus();
   }, [checkOnboardingStatus]);
+
+  /**
+   * Re-reads the authenticated user record.
+   *
+   * Settings → Profile calls this after saving a display name so every
+   * surface reading `user` (sidebar footer, Settings) updates from the same
+   * server-owned record rather than from local component state.
+   */
+  const refreshUser = useCallback(async () => {
+    if (IS_PLATFORM) {
+      return;
+    }
+    try {
+      const response = await api.auth.user();
+      if (!response.ok) {
+        return;
+      }
+      const payload = await parseJsonSafely<AuthUserPayload>(response);
+      if (payload?.user) {
+        setUser(payload.user);
+      }
+    } catch (caughtError) {
+      console.error('[Auth] Failed to refresh user:', caughtError);
+    }
+  }, []);
 
   const refreshSession = useCallback(async () => {
     if (IS_PLATFORM || !token || !user) {
@@ -283,6 +313,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       register,
       logout,
       refreshOnboardingStatus,
+      refreshUser,
     }),
     [
       error,
@@ -292,6 +323,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       logout,
       needsSetup,
       refreshOnboardingStatus,
+      refreshUser,
       register,
       token,
       user,

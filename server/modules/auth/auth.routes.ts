@@ -45,6 +45,15 @@ export function createAuthRouter(
     res.json(service.getCurrentUser((req as AuthenticatedRequest).user));
   });
 
+  router.patch('/user/profile', authenticateToken, (req, res, next) => {
+    try {
+      const body = req.body as { displayName?: unknown };
+      res.json(service.updateProfile((req as AuthenticatedRequest).user, body.displayName ?? null));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/refresh', authenticateToken, (req, res) => {
     res.json(service.refreshSession((req as AuthenticatedRequest).user));
   });

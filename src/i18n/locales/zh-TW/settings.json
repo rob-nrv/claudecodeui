@@ -87,6 +87,7 @@
   },
   "mainTabs": {
     "label": "設定",
+    "profile": "個人資料",
     "agents": "智慧代理",
     "appearance": "外觀",
     "git": "Git",

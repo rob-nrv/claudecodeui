@@ -87,6 +87,7 @@
   },
   "mainTabs": {
     "label": "Ayarlar",
+    "profile": "Profil",
     "agents": "Ajanlar",
     "appearance": "Görünüm",
     "git": "Git",

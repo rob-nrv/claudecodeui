@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Badge, Button, Input } from '../../../../../../../shared/view/ui';
+import { deriveMonogram } from '../../../../../../../shared/identity';
+import IdentityMonogram from '../../../../../../identity/view/IdentityMonogram';
 import ProviderLoginModal from '../../../../../../provider-auth/view/ProviderLoginModal';
 import { useClaudeProfiles, type ClaudeProfile } from '../../../../../hooks/useClaudeProfiles';
 
@@ -68,6 +70,9 @@ function ProfileRow({ profile, pending, onLogin, onVerify, onSetDefault, onRenam
             </div>
           ) : (
             <div className="flex items-center gap-2">
+              {/* Same monogram the chat header and session rows show for this
+                  account, so Settings and the runtime badges always agree. */}
+              <IdentityMonogram monogram={deriveMonogram(profile.displayName)} size="sm" />
               <span className="truncate font-medium text-foreground">{profile.displayName}</span>
               {profile.isDefault && (
                 <Badge variant="secondary" className="bg-muted text-xs">

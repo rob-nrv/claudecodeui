@@ -8,6 +8,8 @@ import type { Project, ProjectSession, LLMProvider } from '../../../../types/app
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import { api } from '../../../../utils/api';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
+import { PROVIDER_LABELS, resolveExecutionIdentity, shouldShowProfileIdentity } from '../../../../shared/identity';
+import ExecutionIdentityBadge from '../../../identity/view/ExecutionIdentityBadge';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel, formatCompactAge, formatElapsedDuration } from '../../utils/utils';
 import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
@@ -40,13 +42,6 @@ type SidebarSessionItemProps = {
     provider: LLMProvider,
   ) => void;
   t: TFunction;
-};
-
-const PROVIDER_LABELS: Record<LLMProvider, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  opencode: 'OpenCode',
 };
 
 type CopyState = 'loading' | 'idle' | 'copying' | 'copied' | 'error';
@@ -84,32 +79,69 @@ export default function SidebarSessionItem({
   const showRecentIndicator = !showAttentionIndicator && !isProcessing && sessionView.isActive;
   const providerLabel = PROVIDER_LABELS[session.__provider];
 
-  // Compact "Work · Running · 2m 14s" / "Personal · Waiting · 1 queued" line
-  // for the Running Sessions tab. Every fragment is a real, provable signal:
-  // the profile label only appears when the run is bound to a known Claude
-  // account, "Waiting" only appears when the server reports a genuine pending
-  // approval (never inferred from silence), and elapsed time is derived, not
-  // authoritative — it stops advancing the instant `activity` disappears.
+  // Which account this row actually runs under. Both the live run and the
+  // stored session read their binding from backend-owned data (`activity`
+  // while running, the persisted session row otherwise) — never from the
+  // current global profile selection. Shown only once more than one account
+  // exists, because with a single account there is nothing to disambiguate.
+  const showProfileIdentity = shouldShowProfileIdentity(claudeProfileNameById.size);
+  const executionIdentity = resolveExecutionIdentity({
+    provider: session.__provider,
+    claudeProfileId: (isProcessing && activity ? activity.claudeProfileId : session.claudeProfileId) ?? null,
+    profileNamesById: claudeProfileNameById,
+    unresolvedLabel: t('running.unknownAccount', 'Unknown account'),
+  });
+  const identityBadge = showProfileIdentity && executionIdentity.profileLabel
+    ? <ExecutionIdentityBadge identity={executionIdentity} />
+    : null;
+
+  // Compact "Running · 2m 14s" / "Waiting · 1 queued" line for the Running
+  // Sessions tab, rendered after the account badge. Every fragment is a real,
+  // provable signal: "Waiting" only appears when the server reports a genuine
+  // pending approval (never inferred from silence), and elapsed time is
+  // derived, not authoritative — it stops advancing the instant `activity`
+  // disappears.
   const runningStatusLabel = (() => {
     if (!showRunningDetail || !isProcessing || !activity) {
       return null;
     }
 
-    const profileLabel = activity.claudeProfileId
-      ? claudeProfileNameById.get(activity.claudeProfileId)
-      : undefined;
     const stateLabel = activity.waiting
       ? t('running.stateWaiting', 'Waiting')
       : t('running.stateRunning', 'Running');
     const elapsedLabel = formatElapsedDuration(activity.startedAt, currentTime);
     const hasQueuedMessage = Boolean(readQueuedMessage(session.id));
 
-    const parts = [profileLabel, stateLabel, elapsedLabel].filter(Boolean);
+    const parts = [stateLabel, elapsedLabel].filter(Boolean);
     if (hasQueuedMessage) {
       parts.push(t('running.queuedCount', '1 queued'));
     }
     return parts.join(' · ');
   })();
+
+  // One shared metadata line per row: account badge, then either the live run
+  // state or the resting message count — never both, and never more than one
+  // identity. The count keeps its original standalone rendering when no badge
+  // applies, so single-account installs see exactly what they see today.
+  const messageCountBadge = sessionView.messageCount > 0
+    ? <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>
+    : null;
+  const trailingMeta = runningStatusLabel
+    ? <p className="min-w-0 truncate text-[11px] text-muted-foreground">{runningStatusLabel}</p>
+    : messageCountBadge;
+  const sessionMetaLine = identityBadge
+    ? (
+      <div className="flex min-w-0 items-center gap-1.5">
+        {identityBadge}
+        {trailingMeta && (
+          <span aria-hidden="true" className="flex-shrink-0 text-[11px] text-muted-foreground">·</span>
+        )}
+        {trailingMeta}
+      </div>
+    )
+    : runningStatusLabel
+      ? <p className="min-w-0 truncate text-[11px] text-muted-foreground">{runningStatusLabel}</p>
+      : null;
 
   // While editing, dismiss only when the user clicks outside the inline rename panel
   // (matches Escape / cancel-button behaviour). The mobile rename lives inside the
@@ -296,16 +328,8 @@ export default function SidebarSessionItem({
                   <span className="ml-auto flex-shrink-0 text-[11px] text-muted-foreground">{compactSessionAge}</span>
                 )}
               </div>
-              <div className="mt-0.5 flex items-center">
-                {runningStatusLabel ? (
-                  <p className="truncate text-[11px] text-muted-foreground">{runningStatusLabel}</p>
-                ) : (
-                  sessionView.messageCount > 0 && (
-                    <Badge variant="secondary" className="px-1 py-0 text-xs">
-                      {sessionView.messageCount}
-                    </Badge>
-                  )
-                )}
+              <div className="mt-0.5 flex min-w-0 items-center">
+                {sessionMetaLine ?? messageCountBadge}
               </div>
             </div>
 
@@ -344,7 +368,7 @@ export default function SidebarSessionItem({
                   {sessionView.sessionName}
                 </p>
                 <p id="mobile-session-options-description" className="text-xs text-muted-foreground">
-                  {providerLabel} session
+                  {identityBadge ? executionIdentity.fullLabel : `${providerLabel} session`}
                 </p>
               </div>
             </div>
@@ -518,12 +542,8 @@ export default function SidebarSessionItem({
                   </span>
                 )}
               </div>
-              <div className="mt-0.5 flex items-center">
-                {runningStatusLabel ? (
-                  <p className="truncate text-[11px] text-muted-foreground">{runningStatusLabel}</p>
-                ) : (
-                  sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>
-                )}
+              <div className="mt-0.5 flex min-w-0 items-center">
+                {sessionMetaLine ?? messageCountBadge}
               </div>
             </div>
           </div>
@@ -589,7 +609,9 @@ export default function SidebarSessionItem({
                     <p className="truncate text-xs font-medium text-foreground" title={sessionView.sessionName}>
                       {sessionView.sessionName}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">{providerLabel} session</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      {identityBadge ? executionIdentity.fullLabel : `${providerLabel} session`}
+                    </p>
                   </div>
                 )}
                 items={[

@@ -104,6 +104,7 @@
   },
   "mainTabs": {
     "label": "设置",
+    "profile": "个人资料",
     "agents": "智能体",
     "appearance": "外观",
     "git": "Git",

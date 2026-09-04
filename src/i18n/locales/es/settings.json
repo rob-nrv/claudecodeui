@@ -104,6 +104,7 @@
   },
   "mainTabs": {
     "label": "Ajustes",
+    "profile": "Perfil",
     "agents": "Agentes",
     "appearance": "Apariencia",
     "git": "Git",

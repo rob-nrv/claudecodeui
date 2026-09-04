@@ -17,6 +17,20 @@
     "profile": "Profile",
     "changePassword": "Change Password"
   },
+  "profile": {
+    "title": "Profile",
+    "description": "How you appear in CloudCLI. Stored on this installation only.",
+    "displayNameLabel": "Display name",
+    "displayNamePlaceholder": "Your name",
+    "displayNameHelp": "Leave empty to use your username.",
+    "noUsername": "No username on record",
+    "save": "Save",
+    "saving": "Saving\u2026",
+    "saved": "Saved",
+    "saveFailed": "Couldn't save your name. Try again.",
+    "accountTitle": "Sign-in",
+    "accountDescription": "The username you sign in with. It cannot be changed here."
+  },
   "mcp": {
     "title": "MCP Servers",
     "addServer": "Add Server",
@@ -104,6 +118,7 @@
   },
   "mainTabs": {
     "label": "Settings",
+    "profile": "Profile",
     "agents": "Agents",
     "appearance": "Appearance",
     "git": "Git",

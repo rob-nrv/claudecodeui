@@ -5,6 +5,8 @@ import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 import { usePlugins } from '../../../../contexts/PluginsContext';
 import { getSessionTitle } from '../../../../utils/pageTitle';
+import { resolveExecutionIdentity, shouldShowProfileIdentity } from '../../../../shared/identity';
+import ExecutionIdentityBadge from '../../../identity/view/ExecutionIdentityBadge';
 import { useClaudeProfiles } from '../../../settings/hooks/useClaudeProfiles';
 
 type MainContentTitleProps = {
@@ -57,21 +59,24 @@ export default function MainContentTitle({
 
   // Discreet "which account did this run under" indicator — only meaningful
   // for Claude sessions bound to an account (CLOUDCLI_EXTENSION_PLAN.md F5).
-  // A bound id that no longer resolves (profile removed) still renders,
-  // deliberately, rather than silently disappearing.
+  // The label comes from the session's persisted `claudeProfileId`, never from
+  // the current global selection, and a bound id that no longer resolves still
+  // renders (as "Unknown account") rather than silently disappearing.
+  const claudeProfileNameById = useMemo(
+    () => new Map(claudeProfiles.map((profile) => [profile.id, profile.displayName])),
+    [claudeProfiles],
+  );
   const sessionProvider = selectedSession?.__provider ?? selectedSession?.provider;
-  const boundClaudeProfileId = selectedSession?.claudeProfileId ?? null;
-  const claudeAccountLabel = useMemo(() => {
-    if (sessionProvider !== 'claude' || !boundClaudeProfileId) {
-      return null;
-    }
-    const profile = claudeProfiles.find((candidate) => candidate.id === boundClaudeProfileId);
-    return profile?.displayName
-      ?? t('mainContent.claudeAccountUnavailable', { defaultValue: 'Unknown account' });
-  }, [sessionProvider, boundClaudeProfileId, claudeProfiles, t]);
-  const projectSubtitle = claudeAccountLabel
-    ? `${selectedProject.displayName} · ${claudeAccountLabel}`
-    : selectedProject.displayName;
+  const executionIdentity = useMemo(() => resolveExecutionIdentity({
+    provider: sessionProvider,
+    claudeProfileId: selectedSession?.claudeProfileId ?? null,
+    profileNamesById: claudeProfileNameById,
+    unresolvedLabel: t('mainContent.claudeAccountUnavailable', { defaultValue: 'Unknown account' }),
+  }), [sessionProvider, selectedSession?.claudeProfileId, claudeProfileNameById, t]);
+
+  // With a single registered account there is no ambiguity to resolve, so the
+  // header stays silent about accounts entirely.
+  const showExecutionIdentity = shouldShowProfileIdentity(claudeProfiles.length);
 
   return (
     <div className="scrollbar-hide flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
@@ -87,7 +92,17 @@ export default function MainContentTitle({
             <h2 title={getSessionTitle(selectedSession)} className="truncate text-sm font-semibold leading-tight text-foreground">
               {getSessionTitle(selectedSession)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{projectSubtitle}</div>
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground">
+              <span className="min-w-0 truncate" title={selectedProject.displayName}>
+                {selectedProject.displayName}
+              </span>
+              {showExecutionIdentity && executionIdentity.profileLabel && (
+                <>
+                  <span aria-hidden="true" className="flex-shrink-0">·</span>
+                  <ExecutionIdentityBadge identity={executionIdentity} className="max-w-[45%] flex-shrink-0" />
+                </>
+              )}
+            </div>
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">

@@ -87,6 +87,7 @@
   },
   "mainTabs": {
     "label": "Настройки",
+    "profile": "Профиль",
     "agents": "Агенты",
     "appearance": "Внешний вид",
     "git": "Git",

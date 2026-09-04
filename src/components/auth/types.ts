@@ -3,6 +3,11 @@ import type { ReactNode } from 'react';
 export type AuthUser = {
   id?: number | string;
   username: string;
+  /**
+   * Optional human name configured in Settings → Profile. Server-normalised
+   * from the `display_name` column; null when the user has not set one.
+   */
+  displayName?: string | null;
   [key: string]: unknown;
 };
 
@@ -43,6 +48,8 @@ export type AuthContextValue = {
   register: (username: string, password: string) => Promise<AuthActionResult>;
   logout: () => void;
   refreshOnboardingStatus: () => Promise<void>;
+  /** Re-reads `/api/auth/user` so identity surfaces stay in sync after a save. */
+  refreshUser: () => Promise<void>;
 };
 
 export type AuthProviderProps = {

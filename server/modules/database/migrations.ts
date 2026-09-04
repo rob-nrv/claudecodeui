@@ -473,6 +473,10 @@ export const runMigrations = (db: Database) => {
     const usersTableInfo = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
     const userColumnNames = usersTableInfo.map((column) => column.name);
 
+    // Optional, per-installation human name for the app user. Nullable so an
+    // existing install keeps showing its registered username until the user
+    // sets one in Settings -> Profile; never seeded with a fixed value.
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'display_name', 'TEXT');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'git_name', 'TEXT');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'git_email', 'TEXT');
     addColumnToTableIfNotExists(

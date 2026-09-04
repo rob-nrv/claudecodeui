@@ -7,12 +7,16 @@ type AuthUser = {
 
 type AuthLoginUser = AuthUser & { password_hash: string };
 
+/** Longest human display name accepted, mirroring Claude profile names. */
+const MAX_DISPLAY_NAME_LENGTH = 60;
+
 type AuthDependencies = {
   users: {
     hasUsers(): boolean;
     createUser(username: string, passwordHash: string): AuthUser;
     getUserByUsername(username: string): AuthLoginUser | undefined;
     updateLastLogin(userId: number): void;
+    updateDisplayName(userId: number, displayName: string | null): void;
   };
   transaction: {
     begin(): void;
@@ -26,6 +30,25 @@ type AuthDependencies = {
 
 function numericUserId(userId: number | bigint): number {
   return Number(userId);
+}
+
+/**
+ * Normalises the authenticated user row into the shape the frontend consumes.
+ *
+ * The raw row is passed through unchanged (existing consumers read
+ * `username` and friends); `displayName` is added as the single camelCase
+ * field the identity layer reads, so no caller has to know that the column
+ * is `display_name`.
+ */
+function withDisplayName(user: unknown): unknown {
+  if (typeof user !== 'object' || user === null) {
+    return user;
+  }
+
+  const row = user as { display_name?: unknown; displayName?: unknown };
+  const configured = typeof row.display_name === 'string' ? row.display_name.trim() : '';
+
+  return { ...row, displayName: configured || null };
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -127,7 +150,48 @@ export function createAuthService(dependencies: AuthDependencies) {
     },
 
     getCurrentUser(user: unknown) {
-      return { user };
+      return { user: withDisplayName(user) };
+    },
+
+    /**
+     * Updates the app user's display name.
+     *
+     * Presentational only — it never touches credentials or the login
+     * identity. An empty value clears the override so the UI falls back to
+     * the registered username rather than to any hardcoded name.
+     */
+    updateProfile(user: unknown, displayNameInput: unknown) {
+      if (
+        typeof user !== 'object'
+        || user === null
+        || !('id' in user)
+        || (typeof user.id !== 'number' && typeof user.id !== 'bigint')
+      ) {
+        throw new AppError('Authenticated user is required', {
+          code: 'AUTH_USER_REQUIRED',
+          statusCode: 401,
+        });
+      }
+
+      if (displayNameInput !== null && typeof displayNameInput !== 'string') {
+        throw new AppError('displayName must be a string or null.', {
+          code: 'AUTH_DISPLAY_NAME_INVALID',
+          statusCode: 400,
+        });
+      }
+
+      const trimmed = typeof displayNameInput === 'string' ? displayNameInput.trim() : '';
+      if (trimmed.length > MAX_DISPLAY_NAME_LENGTH) {
+        throw new AppError(
+          `displayName must be ${MAX_DISPLAY_NAME_LENGTH} characters or fewer.`,
+          { code: 'AUTH_DISPLAY_NAME_TOO_LONG', statusCode: 400 },
+        );
+      }
+
+      const displayName = trimmed || null;
+      dependencies.users.updateDisplayName(numericUserId(user.id), displayName);
+
+      return { success: true, user: { ...(user as object), displayName } };
     },
 
     refreshSession(user: unknown) {

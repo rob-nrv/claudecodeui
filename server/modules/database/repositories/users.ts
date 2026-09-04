@@ -15,12 +15,16 @@ type UserRow = {
   created_at: string;
   last_login: string | null;
   is_active: number;
+  display_name: string | null;
   git_name: string | null;
   git_email: string | null;
   has_completed_onboarding: number;
 };
 
-type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'created_at' | 'last_login'>;
+type UserPublicRow = Pick<
+  UserRow,
+  'id' | 'username' | 'display_name' | 'created_at' | 'last_login'
+>;
 
 type UserGitConfig = {
   git_name: string | null;
@@ -84,7 +88,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, display_name, created_at, last_login FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -94,9 +98,20 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, display_name, created_at, last_login FROM users WHERE is_active = 1 LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
+  },
+
+  /**
+   * Sets (or clears, with null) the app user's human display name.
+   *
+   * Purely presentational: it never affects the login identity, so clearing
+   * it simply falls the UI back to the registered username.
+   */
+  updateDisplayName(userId: number, displayName: string | null): void {
+    const db = getConnection();
+    db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(displayName, userId);
   },
 
   /** Stores the user's preferred git name and email. */
