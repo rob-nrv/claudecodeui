@@ -175,9 +175,15 @@
     overflow: hidden;
   }
 
-  /* Adjust fixed inset positioning in PWA mode */
+  /* Adjust fixed inset positioning in PWA mode.
+     top is intentionally NOT set here: #root already applies
+     padding-top: var(--safe-area-inset-top) in standalone mode (see the
+     display-mode: standalone rule above), and .pwa-header-safe zeroes its
+     own base padding to rely on that single compensation. Also setting
+     top here shifted this position:fixed shell down from the true
+     viewport edge without painting anything above it, exposing the
+     body background as a full-width band at the top of the screen. */
   body.pwa-mode .fixed.inset-0 {
-    top: var(--header-total-padding);
     left: var(--safe-area-inset-left);
     right: var(--safe-area-inset-right);
     bottom: 0;
