@@ -330,4 +330,104 @@ class RuntimeControllerTest {
 
         assertEquals(2, adapter.stopCallCount)
     }
+
+    // ---- START -> STOP -> START cycling (C2-R1-L01) ----
+
+    /**
+     * Answers each call from a script instead of one fixed result, so a whole
+     * ONLINE -> STOP -> OFFLINE -> START sequence can be driven through the
+     * real controller. Also records the order operations actually reached the
+     * adapter in, which is what proves no start was silently swallowed.
+     */
+    private class CyclingAdapter(
+        private val startResults: List<AdapterOutcome<RuntimeStartResultInfo>>,
+        private val stopResults: List<AdapterOutcome<RuntimeStopResultInfo>>,
+    ) : RuntimeAdapter {
+        val calls = mutableListOf<String>()
+        var startCallCount = 0
+        var stopCallCount = 0
+
+        override suspend fun status() = AdapterOutcome.Success(
+            RuntimeStatusInfo("stopped", "no-runtime", false, null, null, null),
+        )
+
+        override suspend fun start(onStep: (StartStep) -> Unit): AdapterOutcome<RuntimeStartResultInfo> {
+            calls.add("start")
+            return startResults[startCallCount++]
+        }
+
+        override suspend fun stop(): AdapterOutcome<RuntimeStopResultInfo> {
+            calls.add("stop")
+            return stopResults[stopCallCount++]
+        }
+
+        override fun webUrl(status: RuntimeStatusInfo?) = status?.url
+    }
+
+    private fun startedAs(instanceId: String) = AdapterOutcome.Success(
+        RuntimeStartResultInfo("started", instanceId, onlineStatus(instanceId), null),
+    )
+
+    private fun stoppedResult() = AdapterOutcome.Success(
+        RuntimeStopResultInfo("stopped", offlineStatus()),
+    )
+
+    @Test
+    fun `three STOP - START cycles each reach Online again with a new instance`() {
+        val scope = TestScope(StandardTestDispatcher())
+        val instances = listOf("instance-1", "instance-2", "instance-3")
+        val adapter = CyclingAdapter(
+            startResults = instances.map { startedAs(it) },
+            stopResults = List(instances.size) { stoppedResult() },
+        )
+        val controller = RuntimeController(adapter, scope)
+
+        instances.forEach { instanceId ->
+            controller.start()
+            scope.advanceUntilIdle()
+            val online = controller.state.value
+            assertTrue(online is RuntimeScreenState.Online)
+            assertEquals(instanceId, (online as RuntimeScreenState.Online).status.instanceId)
+
+            controller.stop()
+            scope.advanceUntilIdle()
+            assertTrue(controller.state.value is RuntimeScreenState.Offline)
+        }
+
+        // Every cycle got through: the busy guard released cleanly each time, so
+        // a START after a STOP is never dropped on the floor.
+        assertEquals(3, adapter.startCallCount)
+        assertEquals(3, adapter.stopCallCount)
+        assertEquals(listOf("start", "stop", "start", "stop", "start", "stop"), adapter.calls)
+    }
+
+    @Test
+    fun `a failed START leaves the controller able to RETRY through the same path`() {
+        val scope = TestScope(StandardTestDispatcher())
+        val adapter = CyclingAdapter(
+            startResults = listOf(
+                AdapterOutcome.Failure(
+                    "The CloudCLI server stopped before it came online.",
+                    "The runtime launch command exited 1 before the server ever answered as online.",
+                ),
+                startedAs("instance-after-retry"),
+            ),
+            stopResults = emptyList(),
+        )
+        val controller = RuntimeController(adapter, scope)
+
+        controller.start()
+        scope.advanceUntilIdle()
+        val failed = controller.state.value
+        assertTrue(failed is RuntimeScreenState.Error)
+        // The message must describe the launch, not claim a health timeout for
+        // a server that never ran.
+        assertTrue((failed as RuntimeScreenState.Error).error.details.contains("exited 1"))
+
+        // RETRY is the same entry point as START — no separate, weaker path.
+        controller.start()
+        scope.advanceUntilIdle()
+        assertTrue(controller.state.value is RuntimeScreenState.Online)
+        assertEquals(2, adapter.startCallCount)
+    }
 }

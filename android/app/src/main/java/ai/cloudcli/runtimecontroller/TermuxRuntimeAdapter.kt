@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -38,9 +39,11 @@ import org.json.JSONObject
  * START does NOT run `cloudcli runtime start` — see
  * [dispatchLongRunningServer] and [TermuxCommandBuilder.buildServerLaunchCommand]
  * for why (device-diagnosed: C2-P1-L02-D01). It dispatches the server itself
- * as a long-running, untracked RUN_COMMAND, then proves success with separate
- * short `status` RUN_COMMANDs — the same tracked round trip [status] and
- * [stop] already use.
+ * as a long-running RUN_COMMAND that is never awaited, then proves success
+ * with separate short `status` RUN_COMMANDs — the same tracked round trip
+ * [status] and [stop] already use. That launch's own result is still watched,
+ * but only for the length of the START, so a launch that dies early is
+ * reported as what it was instead of as a health timeout.
  */
 class TermuxRuntimeAdapter(
     private val context: Context,
@@ -68,17 +71,29 @@ class TermuxRuntimeAdapter(
                 is AdapterOutcome.Failure -> return@coroutineScope outcome
             }
 
+            // Watches only for the duration of this START, not the runtime's
+            // lifetime — see [dispatchLongRunningServer].
+            val launchResult = CompletableDeferred<TermuxCommandResult>()
+            val launchRequestId = TermuxResultReceiver.register(launchResult)
+            val launchExit = AtomicReference<TermuxCommandResult?>(null)
+            val launchWatch: Job = launch { launchExit.set(launchResult.await()) }
+
             val cosmeticPoll: Job = launch { pollHealthUntilCancelled { onStep(StartStep.CLOUDCLI_SERVER) } }
-            val result = RuntimeStartVerifier.start(
-                preflightStatus = initialStatus,
-                dispatchServer = { dispatchLongRunningServer() },
-                pollStatus = { pollStatusOnce() },
-                wait = { milliseconds -> delay(milliseconds) },
-                onStep = onStep,
-                elapsedMs = { System.currentTimeMillis() },
-            )
-            cosmeticPoll.cancel()
-            result
+            try {
+                RuntimeStartVerifier.start(
+                    preflightStatus = initialStatus,
+                    dispatchServer = { dispatchLongRunningServer(launchRequestId) },
+                    pollStatus = { pollStatusOnce() },
+                    wait = { milliseconds -> delay(milliseconds) },
+                    onStep = onStep,
+                    elapsedMs = { System.currentTimeMillis() },
+                    launchExit = { launchExit.get()?.toLaunchExit() },
+                )
+            } finally {
+                cosmeticPoll.cancel()
+                launchWatch.cancel()
+                TermuxResultReceiver.unregister(launchRequestId)
+            }
         }
     }
 
@@ -162,47 +177,58 @@ class TermuxRuntimeAdapter(
     }
 
     /**
-     * Fires the server itself as a long-running RUN_COMMAND — never awaited,
-     * never registered with [TermuxResultReceiver]. This command's own result
-     * would only arrive when the server process eventually exits (at STOP, or
-     * on crash), and holding a [CompletableDeferred]/request id registered
-     * until then — for the runtime's entire lifetime — is exactly the leak
-     * this must avoid.
+     * Fires the server itself as a long-running RUN_COMMAND, never awaited —
+     * this command only finishes when the server process exits (at STOP, or on
+     * crash), so blocking on it would block for the runtime's whole lifetime.
      *
-     * Per RUN_COMMAND's contract, `RUN_COMMAND_PENDING_INTENT` is optional:
-     * omitting it means Termux runs the command and simply never calls back,
-     * which is the fire-and-forget this needs. Whether the *launch* worked is
-     * proven separately, from outside this command entirely, by polling
-     * `status` afterward ([RuntimeStartVerifier]) — this call only proves the
-     * intent reached `RunCommandService`.
+     * It *is* registered with [TermuxResultReceiver] under [requestId], but
+     * only for as long as [start] is running: the caller unregisters in its
+     * `finally`, so nothing is held past the START it belongs to. That bounded
+     * window is what makes an early death observable — if the launch exits
+     * while START is still waiting, its exit code and stderr arrive in time to
+     * be reported as the actual failure instead of a 90s "never became
+     * healthy" timeout. A callback that arrives later, once the id is gone,
+     * resolves to no waiter and is dropped ([TermuxResultReceiver.resolveRequest]).
+     *
+     * Dispatching still proves nothing about the server. It only proves the
+     * intent reached `RunCommandService`; whether CloudCLI actually came up is
+     * decided entirely by the separate `status` round trips
+     * ([RuntimeStartVerifier]).
      *
      * The server becomes this RUN_COMMAND's own main tracee (see
      * [TermuxCommandBuilder.buildServerLaunchCommand]), so proot's
      * `--kill-on-exit` has nothing to kill until the server itself exits.
      */
-    private fun dispatchLongRunningServer(): AdapterOutcome.Failure? {
+    private fun dispatchLongRunningServer(requestId: Int): AdapterOutcome.Failure? {
         val path = "${RuntimeConfig.TERMUX_PREFIX}/bin/proot-distro"
         val arguments = arrayOf(
             "login", config.distro,
             "--user", config.prootUsername,
             "--", "bash", "-lc", TermuxCommandBuilder.buildServerLaunchCommand(config.repoPath),
         )
-        return startTermuxService(buildRunCommandIntent(path, arguments, pendingIntent = null))
+        return dispatch<Nothing>(path to arguments, requestId) as AdapterOutcome.Failure?
     }
 
-    private fun buildRunCommandIntent(path: String, arguments: Array<String>, pendingIntent: PendingIntent?): Intent {
-        val intent = Intent()
+    private fun TermuxCommandResult.toLaunchExit() = RuntimeStartVerifier.LaunchExit(
+        exitCode = exitCode,
+        stderr = stderr,
+        executionError = executionError,
+    )
+
+    /**
+     * Every command this adapter sends now carries a result PendingIntent —
+     * the short CLI verbs because they are awaited, and the server launch
+     * because its exit is the only direct evidence of an early launch failure.
+     */
+    private fun buildRunCommandIntent(path: String, arguments: Array<String>, pendingIntent: PendingIntent): Intent =
+        Intent()
             .setClassName(RuntimeConfig.TERMUX_PACKAGE, "com.termux.app.RunCommandService")
             .setAction("com.termux.RUN_COMMAND")
             .putExtra("com.termux.RUN_COMMAND_PATH", path)
             .putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arguments)
             .putExtra("com.termux.RUN_COMMAND_WORKDIR", RuntimeConfig.TERMUX_HOME)
             .putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-        if (pendingIntent != null) {
-            intent.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pendingIntent)
-        }
-        return intent
-    }
+            .putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pendingIntent)
 
     private fun startTermuxService(commandIntent: Intent): AdapterOutcome.Failure? = try {
         context.startService(commandIntent)

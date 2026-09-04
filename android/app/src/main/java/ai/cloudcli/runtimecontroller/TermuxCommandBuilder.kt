@@ -39,6 +39,34 @@ package ai.cloudcli.runtimecontroller
  * ART/dalvik vars proot-distro injects) is preserved exactly as before —
  * this only fixes the one broken step, it does not change how the shell is
  * invoked otherwise.
+ *
+ * TERMUX_NODE_SHADOWING, the second half of the same problem (device-diagnosed,
+ * C2-R1-L01):
+ *
+ * proot-distro drops `/etc/profile.d/termux-profile.sh` into every container it
+ * builds, and that file appends `/data/data/com.termux/files/usr/bin` to PATH
+ * for every login shell. If the user has Termux's own `node` package installed
+ * (very common — it is how most people get `node` on Android at all), then
+ * inside the distro `command -v node` resolves to *that* binary: an Android
+ * build linked against bionic, not the distro's glibc.
+ *
+ * It runs, which is what made this so hard to see. Pure-JavaScript work is
+ * fine under it, so `cloudcli runtime status` and `runtime stop` — which load
+ * no native addon — kept working perfectly through RUN_COMMAND, and only the
+ * server launch failed. The server entry loads `better-sqlite3`, whose
+ * prebuilt `.node` was compiled against the distro's node/glibc; Android's
+ * linker refuses to `dlopen` a path outside its permitted namespaces and node
+ * exits immediately with ERR_DLOPEN_FAILED. The proot session's main command
+ * is gone, so nothing is left in `ps` and the Android side sees only "never
+ * became healthy".
+ *
+ * A manual `proot-distro login` never hit this: an *interactive* shell does
+ * reach the nvm block at the bottom of `~/.bashrc`, and nvm prepends its own
+ * bin directory to the *front* of PATH, ahead of the Termux entry that
+ * `termux-profile.sh` only ever appends.
+ *
+ * So resolution here must reject a Termux-prefixed `node` the same way it
+ * rejects no node at all, and fall through to the version-manager lookup.
  */
 object TermuxCommandBuilder {
 
@@ -65,11 +93,31 @@ object TermuxCommandBuilder {
         append("  [ -d \"\$__cc_dir\" ] && case \":\$PATH:\" in *\":\$__cc_dir:\"*) ;; *) PATH=\"\$__cc_dir:\$PATH\" ;; esac\n")
         append("done\n")
         append("unset __cc_dir\n")
-        append("if ! command -v node >/dev/null 2>&1; then\n")
-        append("  export NVM_DIR=\"\${NVM_DIR:-\$HOME/.nvm}\"\n")
-        append("  [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"\n")
-        append("fi")
+        // Not `if ! command -v node`: a bare "is node resolvable" test is
+        // satisfied by Termux's own node (see TERMUX_NODE_SHADOWING above), so
+        // the fallback below has to treat that one as "no node found" too.
+        append("case \"\$(command -v node 2>/dev/null)\" in\n")
+        append("  ''|${RuntimeConfig.TERMUX_PREFIX}/*)\n")
+        append("    export NVM_DIR=\"\${NVM_DIR:-\$HOME/.nvm}\"\n")
+        append("    [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"\n")
+        append("    ;;\n")
+        append("esac")
     }
+
+    /**
+     * One stderr line naming the interpreter this launch actually resolved,
+     * emitted only by [buildServerLaunchCommand]. Deliberately not part of
+     * [NODE_BOOTSTRAP]: the CLI-verb command's stdout is parsed as JSON and
+     * its bootstrap must stay silent on both streams.
+     *
+     * If the server survives, nobody ever reads this — Termux only delivers a
+     * command's output when it exits. It exists for the case that matters: a
+     * launch that dies during START, where the very first question is
+     * "which node ran it", and where TERMUX_NODE_SHADOWING makes the answer
+     * non-obvious. A path is not a secret, and no environment values,
+     * arguments or tokens are printed alongside it.
+     */
+    const val NODE_ECHO_LINE: String = "printf '[cloudcli] node=%s\\n' \"\$(command -v node || echo none)\" >&2"
 
     /**
      * Single-quotes [value] for safe use as one shell word: closes the quote,
@@ -108,5 +156,6 @@ object TermuxCommandBuilder {
      */
     fun buildServerLaunchCommand(repoPath: String): String =
         "$NODE_BOOTSTRAP\n" +
+            NODE_ECHO_LINE + "\n" +
             "cd ${shellQuote(repoPath)} && exec node dist-server/server/index.js"
 }

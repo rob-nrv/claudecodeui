@@ -49,6 +49,29 @@ object RuntimeStartVerifier {
     )
 
     /**
+     * What Termux reported for the *launch command itself* once it exited —
+     * null for as long as that command is still running, which for a healthy
+     * server is the whole START.
+     *
+     * This is the missing observation that made the old failure message a
+     * lie. START dispatches the server and then only ever watches `status`,
+     * so a launch that died on the first line (wrong interpreter, missing
+     * build, bad distro/user) looked exactly like a slow boot, and after 90s
+     * the user was told "CloudCLI started but never became healthy" about a
+     * process that never existed. A dispatch acknowledgement is not a running
+     * server; this is what tells the two apart.
+     */
+    data class LaunchExit(
+        val exitCode: Int?,
+        val stderr: String,
+        /** Termux's own failure to run the command at all, as opposed to the command's exit code. */
+        val executionError: String?,
+    )
+
+    /** Upper bound on how much launch stderr is quoted back into a failure detail. */
+    private const val STDERR_TAIL_CHARS = 600
+
+    /**
      * @param preflightStatus a `status` reading taken before any dispatch decision.
      * @param dispatchServer fires the long-running server RUN_COMMAND; returns
      *   null on a successful dispatch, a [AdapterOutcome.Failure] if the
@@ -57,6 +80,10 @@ object RuntimeStartVerifier {
      * @param pollStatus one `status` observation, dispatched fresh each call.
      * @param wait suspends for the given duration; injected so tests can make
      *   it instant instead of really sleeping.
+     * @param launchExit reports how the dispatched launch command ended, or
+     *   null while it is still running. Only consulted once this call has
+     *   actually dispatched something — when an in-flight start was adopted
+     *   instead, there is no launch of ours to have an exit.
      * @param elapsedMs a monotonic millisecond clock; injected for the same reason.
      */
     suspend fun start(
@@ -66,6 +93,7 @@ object RuntimeStartVerifier {
         wait: suspend (Long) -> Unit,
         onStep: (StartStep) -> Unit,
         elapsedMs: () -> Long,
+        launchExit: () -> LaunchExit? = { null },
         policy: Policy = Policy(),
     ): AdapterOutcome<RuntimeStartResultInfo> {
         // A. Already online and provably ours: idempotent, nothing to launch.
@@ -86,7 +114,8 @@ object RuntimeStartVerifier {
         // C. Genuinely stopped: dispatch. If a start already looked in flight
         // (fresh marker, no health yet), don't launch a second server on top
         // of it — just start observing.
-        if (preflightStatus.state != "starting") {
+        val dispatched = preflightStatus.state != "starting"
+        if (dispatched) {
             dispatchServer()?.let { return it }
         }
         onStep(StartStep.LINUX_ENVIRONMENT)
@@ -95,6 +124,12 @@ object RuntimeStartVerifier {
         var status: RuntimeStatusInfo
 
         while (true) {
+            // Checked before the status poll: when the launch is already dead,
+            // "the command exited" is the true and useful answer, and the
+            // "stopped" status that poll would return is just its shadow.
+            if (dispatched) {
+                launchExit()?.let { return launchFailure(it) }
+            }
             when (val outcome = pollStatus()) {
                 is AdapterOutcome.Failure -> return outcome
                 is AdapterOutcome.Success -> {
@@ -146,6 +181,34 @@ object RuntimeStartVerifier {
         onStep(StartStep.HEALTH_CHECK)
         return AdapterOutcome.Success(
             RuntimeStartResultInfo(outcome = "started", newInstanceId = status.instanceId, status = status, launchError = null),
+        )
+    }
+
+    /**
+     * Turns a dead launch into a message that says what actually happened.
+     * Never claims CloudCLI started: by construction this is only reachable
+     * when the launch command has already exited without the server ever
+     * having been observed online.
+     */
+    private fun launchFailure(exit: LaunchExit): AdapterOutcome.Failure {
+        val tail = exit.stderr.trim().takeLast(STDERR_TAIL_CHARS)
+        return AdapterOutcome.Failure(
+            userMessage = if (exit.executionError != null) {
+                "Termux couldn't run the CloudCLI server."
+            } else {
+                "The CloudCLI server stopped before it came online."
+            },
+            details = buildString {
+                append(
+                    exit.executionError
+                        ?: "The runtime launch command exited ${exit.exitCode ?: "?"} " +
+                        "before the server ever answered as online.",
+                )
+                if (tail.isNotEmpty()) {
+                    append("\n")
+                    append(tail)
+                }
+            },
         )
     }
 }

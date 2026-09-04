@@ -2,6 +2,7 @@ package ai.cloudcli.runtimecontroller
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,6 +68,20 @@ class RuntimeStartVerifierTest {
         val dispatch: suspend () -> AdapterOutcome.Failure? = {
             callCount += 1
             failure
+        }
+    }
+
+    /**
+     * Stands in for "has the dispatched launch command exited yet, and how".
+     * [exitAfter] is how many probes report "still running" before the exit is
+     * visible — real launches die a moment after dispatch, not during it.
+     */
+    private class FakeLaunch(private val exit: RuntimeStartVerifier.LaunchExit?, private val exitAfter: Int = 0) {
+        var probeCount = 0
+        val probe: () -> RuntimeStartVerifier.LaunchExit? = {
+            val visible = probeCount >= exitAfter
+            probeCount += 1
+            if (visible) exit else null
         }
     }
 
@@ -317,5 +332,174 @@ class RuntimeStartVerifierTest {
         assertTrue(onSteps.contains(StartStep.HEALTH_CHECK))
         // Reported only after the first ONLINE reading plus every confirmation poll.
         assertEquals(RuntimeStartVerifier.Policy().stabilityConfirmations + 1, statuses.callCount)
+    }
+
+    // ---- launch-exit observation: a dispatch is not a running server ----
+    //
+    // C2-R1-L01. Before these, START had exactly one way to end badly: wait the
+    // full 90s and say "CloudCLI started but never became healthy" — a claim it
+    // had no evidence for, and which was flatly wrong in the field case that
+    // prompted this (the launch died on its first line and no process ever
+    // existed).
+
+    @Test
+    fun `a launch that exits before coming online reports that exit, not a health timeout`() = runTest {
+        val clock = FakeClock()
+        val dispatcher = FakeDispatcher()
+        val policy = RuntimeStartVerifier.Policy(serverOnlineTimeoutMs = 90_000, statusPollIntervalMs = 2_000)
+        val launch = FakeLaunch(
+            RuntimeStartVerifier.LaunchExit(exitCode = 1, stderr = "Error: ERR_DLOPEN_FAILED", executionError = null),
+            exitAfter = 1,
+        )
+        val statuses = FakeStatusSequence(List(60) { AdapterOutcome.Success(stopped()) })
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = stopped(),
+            dispatchServer = dispatcher.dispatch,
+            pollStatus = statuses.poll,
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+            launchExit = launch.probe,
+            policy = policy,
+        )
+
+        assertTrue(result is AdapterOutcome.Failure)
+        val failure = result as AdapterOutcome.Failure
+        // Never claims CloudCLI started: no process was ever observed running.
+        assertFalse(failure.userMessage.contains("started"))
+        assertTrue(failure.details.contains("exited 1"))
+        assertTrue(failure.details.contains("ERR_DLOPEN_FAILED"))
+        // And it says so immediately, instead of burning the whole timeout first.
+        assertTrue(clock.nowMs < policy.serverOnlineTimeoutMs)
+    }
+
+    @Test
+    fun `Termux failing to run the launch at all is reported as that, not as the server dying`() = runTest {
+        val clock = FakeClock()
+        val launch = FakeLaunch(
+            RuntimeStartVerifier.LaunchExit(exitCode = null, stderr = "", executionError = "Executable not found."),
+        )
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = stopped(),
+            dispatchServer = FakeDispatcher().dispatch,
+            pollStatus = { error("status must not be polled once the launch is known dead") },
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+            launchExit = launch.probe,
+        )
+
+        assertTrue(result is AdapterOutcome.Failure)
+        assertEquals("Termux couldn't run the CloudCLI server.", (result as AdapterOutcome.Failure).userMessage)
+        assertTrue(result.details.contains("Executable not found."))
+    }
+
+    @Test
+    fun `launch stderr quoted back into the failure is bounded`() = runTest {
+        val clock = FakeClock()
+        val noisy = "x".repeat(50_000)
+        val launch = FakeLaunch(RuntimeStartVerifier.LaunchExit(exitCode = 127, stderr = noisy, executionError = null))
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = stopped(),
+            dispatchServer = FakeDispatcher().dispatch,
+            pollStatus = { error("status must not be polled once the launch is known dead") },
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+            launchExit = launch.probe,
+        )
+
+        assertTrue(result is AdapterOutcome.Failure)
+        assertTrue((result as AdapterOutcome.Failure).details.length < 1_000)
+    }
+
+    @Test
+    fun `a launch exit is never attributed to a start we did not dispatch`() = runTest {
+        val clock = FakeClock()
+        val dispatcher = FakeDispatcher()
+        // An in-flight start is adopted, so nothing of ours was launched — a
+        // stale exit result must not be able to fail somebody else's start.
+        val launch = FakeLaunch(
+            RuntimeStartVerifier.LaunchExit(exitCode = 1, stderr = "stale", executionError = null),
+        )
+        val statuses = FakeStatusSequence(
+            List(RuntimeStartVerifier.Policy().stabilityConfirmations + 1) {
+                AdapterOutcome.Success(online("instance-h"))
+            },
+        )
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = starting(),
+            dispatchServer = dispatcher.dispatch,
+            pollStatus = statuses.poll,
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+            launchExit = launch.probe,
+        )
+
+        assertEquals(0, dispatcher.callCount)
+        assertEquals(0, launch.probeCount)
+        assertTrue(result is AdapterOutcome.Success)
+    }
+
+    @Test
+    fun `a live launch that simply has not finished booting still gets the full online wait`() = runTest {
+        val clock = FakeClock()
+        val instanceId = "instance-i"
+        // probe always says "still running" — the normal case for a healthy server.
+        val launch = FakeLaunch(exit = null)
+        val statuses = FakeStatusSequence(
+            listOf(AdapterOutcome.Success(stopped()), AdapterOutcome.Success(starting())) +
+                List(RuntimeStartVerifier.Policy().stabilityConfirmations + 1) {
+                    AdapterOutcome.Success(online(instanceId))
+                },
+        )
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = stopped(),
+            dispatchServer = FakeDispatcher().dispatch,
+            pollStatus = statuses.poll,
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+            launchExit = launch.probe,
+        )
+
+        assertTrue(result is AdapterOutcome.Success)
+        assertEquals(instanceId, (result as AdapterOutcome.Success).value.newInstanceId)
+    }
+
+    @Test
+    fun `START after a STOP dispatches a fresh launch and accepts the new instance id`() = runTest {
+        // The reported field sequence: ONLINE -> STOP -> OFFLINE -> START again.
+        // Nothing about the previous instance may leak into the second start —
+        // it must dispatch again and confirm whatever new identity comes up.
+        val clock = FakeClock()
+        val dispatcher = FakeDispatcher()
+        val secondInstance = "instance-after-stop"
+        val statuses = FakeStatusSequence(
+            listOf(AdapterOutcome.Success(stopped())) +
+                List(RuntimeStartVerifier.Policy().stabilityConfirmations + 1) {
+                    AdapterOutcome.Success(online(secondInstance))
+                },
+        )
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = stopped(), // exactly what a completed STOP leaves behind
+            dispatchServer = dispatcher.dispatch,
+            pollStatus = statuses.poll,
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+            launchExit = FakeLaunch(exit = null).probe,
+        )
+
+        assertEquals(1, dispatcher.callCount)
+        assertTrue(result is AdapterOutcome.Success)
+        assertEquals(secondInstance, (result as AdapterOutcome.Success).value.newInstanceId)
     }
 }

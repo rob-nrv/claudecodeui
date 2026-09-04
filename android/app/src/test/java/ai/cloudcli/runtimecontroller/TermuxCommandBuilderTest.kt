@@ -155,4 +155,78 @@ class TermuxCommandBuilderTest {
         assertTrue(command.contains("&& exec node"))
         assertFalse(command.trim().endsWith("&"))
     }
+
+    // ---- TERMUX_NODE_SHADOWING regression (C2-R1-L01) ----
+    //
+    // Field failure: STATUS and STOP worked while START always ended in
+    // "CloudCLI started but never became healthy" and left no process behind.
+    // Cause: proot-distro's own /etc/profile.d/termux-profile.sh appends
+    // Termux's bin dir to PATH in every login shell, so inside the distro
+    // `command -v node` found Termux's Android/bionic node. The pure-JS CLI
+    // verbs ran fine under it; the server entry loads better-sqlite3 and died
+    // instantly on ERR_DLOPEN_FAILED. Reproduced on-device before this fix.
+
+    @Test
+    fun `bootstrap treats a Termux-provided node as no node at all`() {
+        val bootstrap = TermuxCommandBuilder.NODE_BOOTSTRAP
+        // The version-manager fallback must be reachable when the only node on
+        // PATH lives under Termux's prefix, not just when there is none.
+        assertTrue(bootstrap.contains("''|${RuntimeConfig.TERMUX_PREFIX}/*)"))
+        // The bare test this replaced is satisfied by Termux's node, which is
+        // exactly how the wrong interpreter got through.
+        assertFalse(bootstrap.contains("if ! command -v node"))
+    }
+
+    @Test
+    fun `bootstrap still resolves a distro node without touching the version-manager fallback`() {
+        val bootstrap = TermuxCommandBuilder.NODE_BOOTSTRAP
+        // A node anywhere outside the Termux prefix matches no case branch, so
+        // nvm.sh is never sourced — an apt-installed /usr/bin/node keeps working.
+        assertTrue(bootstrap.contains("case \"\$(command -v node 2>/dev/null)\" in"))
+        assertTrue(bootstrap.contains("nvm.sh"))
+        assertTrue(bootstrap.contains("esac"))
+    }
+
+    @Test
+    fun `bootstrap does not hardcode the Termux prefix separately from RuntimeConfig`() {
+        // One definition of where Termux lives; the launcher and the bootstrap
+        // must never be able to disagree about it.
+        assertTrue(TermuxCommandBuilder.NODE_BOOTSTRAP.contains(RuntimeConfig.TERMUX_PREFIX))
+    }
+
+    // ---- launch diagnostics ----
+
+    @Test
+    fun `server launch names the resolved node on stderr only`() {
+        val command = TermuxCommandBuilder.buildServerLaunchCommand("/home/robin/projects/claudecodeui")
+        assertTrue(command.contains(TermuxCommandBuilder.NODE_ECHO_LINE))
+        assertTrue(TermuxCommandBuilder.NODE_ECHO_LINE.endsWith(">&2"))
+        // The shared bootstrap stays silent — this line is the launch command's
+        // alone, so the CLI verbs' stdout remains pure JSON.
+        assertFalse(TermuxCommandBuilder.NODE_BOOTSTRAP.contains(TermuxCommandBuilder.NODE_ECHO_LINE))
+    }
+
+    @Test
+    fun `the node diagnostic prints only a path, never environment values`() {
+        val line = TermuxCommandBuilder.NODE_ECHO_LINE
+        assertTrue(line.contains("command -v node"))
+        // No env/set/printenv dump, and no expansion of anything but the node path.
+        assertFalse(line.contains("printenv"))
+        assertFalse(line.contains("\$PATH"))
+        assertFalse(line.contains("env"))
+    }
+
+    @Test
+    fun `the CLI-verb command stays silent so its stdout is parseable JSON`() {
+        val command = TermuxCommandBuilder.buildInnerCommand("/home/robin/projects/claudecodeui", "status")
+        assertFalse(command.contains("printf"))
+        assertFalse(command.contains("echo"))
+    }
+
+    @Test
+    fun `server launch still ends by exec-ing the server, after the diagnostic line`() {
+        val command = TermuxCommandBuilder.buildServerLaunchCommand("/home/robin/projects/claudecodeui")
+        assertTrue(command.trim().endsWith("exec node dist-server/server/index.js"))
+        assertTrue(command.indexOf(TermuxCommandBuilder.NODE_ECHO_LINE) < command.indexOf("cd '"))
+    }
 }
