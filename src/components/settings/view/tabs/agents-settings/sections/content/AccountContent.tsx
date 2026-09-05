@@ -1,7 +1,9 @@
 import { LogIn } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge, Button } from '../../../../../../../shared/view/ui';
 import LLMProviderLogo from '../../../../../../llm-provider-logo/LLMProviderLogo';
+import UsageCheckModal from '../../../../../../usage/view/UsageCheckModal';
 import type { AgentProvider, AuthStatus } from '../../../../../types/types';
 
 type AccountContentProps = {
@@ -59,6 +61,7 @@ const agentConfig: Record<AgentProvider, AgentVisualConfig> = {
 export default function AccountContent({ agent, authStatus, onLogin }: AccountContentProps) {
   const { t } = useTranslation('settings');
   const config = agentConfig[agent];
+  const [isCheckingUsage, setIsCheckingUsage] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -110,6 +113,18 @@ export default function AccountContent({ agent, authStatus, onLogin }: AccountCo
             </div>
           </div>
 
+          {agent === 'claude' && authStatus.authenticated && (
+            <div className="border-t border-border/50 pt-4">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setIsCheckingUsage(true)}
+              >
+                {t('claudeProfiles.actions.checkUsage')}
+              </Button>
+            </div>
+          )}
+
           {authStatus.method !== 'api_key' && (
             <div className="border-t border-border/50 pt-4">
               <div className="flex items-center justify-between">
@@ -144,6 +159,10 @@ export default function AccountContent({ agent, authStatus, onLogin }: AccountCo
           )}
         </div>
       </div>
+
+      {agent === 'claude' && (
+        <UsageCheckModal isOpen={isCheckingUsage} onClose={() => setIsCheckingUsage(false)} />
+      )}
     </div>
   );
 }

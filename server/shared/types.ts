@@ -86,6 +86,16 @@ export type ProviderModelOption = {
       description?: string;
     }[];
   };
+  /**
+   * Static, sourced model facts (context window / max output tokens) — never
+   * live usage. Omitted for aliases like `default`/`best`/`opusplan` whose
+   * resolved underlying model varies, since a single fixed number would be
+   * false for some of them. A missing value must render as absent, not zero.
+   */
+  capability?: {
+    contextWindowTokens?: number;
+    maxOutputTokens?: number;
+  };
 };
 
 /**

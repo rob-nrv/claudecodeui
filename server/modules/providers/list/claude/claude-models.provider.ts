@@ -9,6 +9,19 @@ import type {
 } from '@/shared/types.js';
 import { buildDefaultProviderCurrentActiveModel } from '@/shared/utils.js';
 
+/**
+ * Static context-window / max-output facts for models this catalog can name
+ * unambiguously, from Anthropic's models overview
+ * (https://platform.claude.com/docs/en/models/overview, accessed 2026-09-05).
+ * Omitted for `default`/`best`/`opusplan`, whose resolved underlying model
+ * varies by account/availability — a single fixed number would be wrong for
+ * some of them. These are static facts, not live usage or quota.
+ */
+const FABLE_CAPABILITY = { contextWindowTokens: 1_000_000, maxOutputTokens: 128_000 };
+const OPUS_CAPABILITY = { contextWindowTokens: 1_000_000, maxOutputTokens: 128_000 };
+const SONNET_CAPABILITY = { contextWindowTokens: 1_000_000, maxOutputTokens: 128_000 };
+const HAIKU_CAPABILITY = { contextWindowTokens: 200_000, maxOutputTokens: 64_000 };
+
 export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
   OPTIONS: [
     {
@@ -44,6 +57,7 @@ export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
       value: 'fable',
       label: 'Fable 5',
       description: 'Most capable Claude model for the hardest, longest-running tasks.',
+      capability: FABLE_CAPABILITY,
       effort: {
         default: 'high',
         values: [
@@ -59,6 +73,7 @@ export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
       value: 'sonnet',
       label: 'Sonnet',
       description: 'Latest Sonnet model for everyday coding tasks.',
+      capability: SONNET_CAPABILITY,
       effort: {
         default: 'high',
         values: [
@@ -74,6 +89,7 @@ export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
       value: 'sonnet[1m]',
       label: 'Sonnet (1M context)',
       description: 'Latest Sonnet model with a 1M context window.',
+      capability: SONNET_CAPABILITY,
       effort: {
         default: 'high',
         values: [
@@ -89,6 +105,7 @@ export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
       value: 'opus',
       label: 'Opus',
       description: 'Latest Opus model for complex reasoning and coding tasks.',
+      capability: OPUS_CAPABILITY,
       effort: {
         default: 'high',
         values: [
@@ -104,6 +121,7 @@ export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
       value: 'opus[1m]',
       label: 'Opus (1M context)',
       description: 'Latest Opus model with a 1M context window.',
+      capability: OPUS_CAPABILITY,
       effort: {
         default: 'high',
         values: [
@@ -119,6 +137,7 @@ export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
       value: 'haiku',
       label: 'Haiku',
       description: 'Fast and efficient Claude model for simple tasks.',
+      capability: HAIKU_CAPABILITY,
     },
     {
       value: 'opusplan',

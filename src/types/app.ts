@@ -13,6 +13,11 @@ export type ProviderModelOption = {
       description?: string;
     }[];
   };
+  /** Static, sourced model facts (context window / max output) — never live usage. */
+  capability?: {
+    contextWindowTokens?: number;
+    maxOutputTokens?: number;
+  };
 };
 
 export type ProviderModelsDefinition = {

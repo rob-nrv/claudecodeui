@@ -5,6 +5,7 @@ import { Badge, Button, Input } from '../../../../../../../shared/view/ui';
 import { deriveMonogram } from '../../../../../../../shared/identity';
 import IdentityMonogram from '../../../../../../identity/view/IdentityMonogram';
 import ProviderLoginModal from '../../../../../../provider-auth/view/ProviderLoginModal';
+import UsageCheckModal from '../../../../../../usage/view/UsageCheckModal';
 import { useClaudeProfiles, type ClaudeProfile } from '../../../../../hooks/useClaudeProfiles';
 
 const connectionBadgeClass = (state: ClaudeProfile['connectionState']): string => {
@@ -35,6 +36,7 @@ function ProfileRow({ profile, pending, onLogin, onVerify, onSetDefault, onRenam
   const [renameValue, setRenameValue] = useState(profile.displayName);
   const [isConfirmingRemove, setIsConfirmingRemove] = useState(false);
   const [removeConfirmText, setRemoveConfirmText] = useState('');
+  const [isCheckingUsage, setIsCheckingUsage] = useState(false);
 
   const isConnected = profile.connectionState === 'connected';
 
@@ -119,6 +121,16 @@ function ProfileRow({ profile, pending, onLogin, onVerify, onSetDefault, onRenam
               {pending ? t('claudeProfiles.actions.verifying') : t('claudeProfiles.actions.verify')}
             </Button>
           )}
+          {isConnected && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => setIsCheckingUsage(true)}
+            >
+              {t('claudeProfiles.actions.checkUsage')}
+            </Button>
+          )}
           {!profile.isDefault && (
             <Button
               size="sm"
@@ -187,6 +199,12 @@ function ProfileRow({ profile, pending, onLogin, onVerify, onSetDefault, onRenam
           )}
         </div>
       )}
+
+      <UsageCheckModal
+        isOpen={isCheckingUsage}
+        claudeProfileId={profile.id}
+        onClose={() => setIsCheckingUsage(false)}
+      />
     </div>
   );
 }

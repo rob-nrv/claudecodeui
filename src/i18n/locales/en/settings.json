@@ -404,6 +404,7 @@
       "setDefault": "Set default",
       "verify": "Verify identity",
       "verifying": "Verifying...",
+      "checkUsage": "Check usage",
       "remove": "Remove",
       "confirmRemove": "Confirm remove"
     }
