@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ProviderModelOption } from '../../../../types/app';
 import { DEFAULT_EFFORT_VALUE } from '../../constants/providerEffort';
 import { useComposerMenuAnchor } from '../../hooks/useComposerMenuAnchor';
+import { formatModelCapability } from '../../utils/modelCapability';
 
 import {
   ComposerMenuHeading,
@@ -149,6 +150,7 @@ export default function ComposerModelMenu({
                     <ComposerMenuItem
                       key={option.value}
                       label={option.label || option.value}
+                      description={formatModelCapability(option.capability)}
                       isSelected={option.value === model}
                       onSelect={() => {
                         onSelectModel(option.value);

@@ -31,6 +31,7 @@ import type {
   ModelCommandData,
   StatusCommandData,
 } from '../../hooks/useChatComposerState';
+import { formatModelCapability } from '../../utils/modelCapability';
 
 import ModelLibraryPanel from './ModelLibraryPanel';
 
@@ -353,6 +354,7 @@ function ModelsContent({
               const isCurrent = option.value === currentModel;
               const isPendingSelection = option.value === pendingSessionModel;
               const isChanging = option.value === changingModel;
+              const capabilityLabel = formatModelCapability(option.capability);
               return (
                 <button
                   key={option.value}
@@ -385,6 +387,11 @@ function ModelsContent({
                   )}
                   {option.description && (
                     <span className="mt-1 text-xs leading-5 text-muted-foreground">{option.description}</span>
+                  )}
+                  {capabilityLabel && (
+                    <span className="mt-1 text-[11px] leading-4 text-muted-foreground/80">
+                      {capabilityLabel}
+                    </span>
                   )}
                   {isCurrent && (
                     <span className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Current selection</span>

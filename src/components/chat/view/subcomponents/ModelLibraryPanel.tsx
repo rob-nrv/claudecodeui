@@ -18,24 +18,7 @@ import type {
   ProviderModelsDefinition,
 } from '../../../../types/app';
 import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
-
-const formatTokenCount = (tokens: number): string => (
-  tokens >= 1_000_000 ? `${tokens / 1_000_000}M` : `${Math.round(tokens / 1000)}K`
-);
-
-const formatCapability = (capability: ProviderModelOption['capability']): string | null => {
-  if (!capability) {
-    return null;
-  }
-  const parts: string[] = [];
-  if (capability.contextWindowTokens) {
-    parts.push(`${formatTokenCount(capability.contextWindowTokens)} context`);
-  }
-  if (capability.maxOutputTokens) {
-    parts.push(`${formatTokenCount(capability.maxOutputTokens)} max output`);
-  }
-  return parts.length > 0 ? parts.join(' · ') : null;
-};
+import { formatModelCapability } from '../../utils/modelCapability';
 
 const PROVIDERS: Array<{ id: LLMProvider; label: string }> = [
   { id: 'claude', label: 'Claude' },
@@ -375,7 +358,7 @@ export default function ModelLibraryPanel({
             </div>
             <div className="overflow-hidden rounded-2xl border border-border/70 bg-background/70">
               {predefinedModels.map((option) => {
-                const capabilityLabel = formatCapability(option.capability);
+                const capabilityLabel = formatModelCapability(option.capability);
                 return (
                   <div key={option.recordId ?? option.value} className="flex items-center gap-3 border-b border-border/60 px-3 py-2.5 last:border-b-0">
                     <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
