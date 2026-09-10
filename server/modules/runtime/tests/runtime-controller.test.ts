@@ -89,7 +89,7 @@ test('a runtime we cannot prove is ours is never signalled', async () => {
   // would mean killing a process this installation did not start.
   const foreign: RuntimeEvidence = {
     marker: MARKER,
-    health: { instanceId: 'instance-z', startedAt: null },
+    health: { instanceId: 'instance-z', startedAt: null, appReady: true },
     processAlive: null,
   };
   const harness = createHarness([foreign]);
@@ -104,7 +104,7 @@ test('a runtime we cannot prove is ours is never signalled', async () => {
 test('a server too old to publish an identity is left alone rather than guessed at', async () => {
   const unverified: RuntimeEvidence = {
     marker: MARKER,
-    health: { instanceId: null, startedAt: null },
+    health: { instanceId: null, startedAt: null, appReady: true },
     processAlive: null,
   };
   const harness = createHarness([unverified]);
@@ -118,7 +118,7 @@ test('a server too old to publish an identity is left alone rather than guessed 
 test('a marker-less server on the port is reported but never signalled', async () => {
   const foreign: RuntimeEvidence = {
     marker: null,
-    health: { instanceId: 'instance-z', startedAt: null },
+    health: { instanceId: 'instance-z', startedAt: null, appReady: true },
     processAlive: null,
   };
   const harness = createHarness([foreign]);

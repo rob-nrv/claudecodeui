@@ -72,6 +72,7 @@ const STATUS_EXPLANATIONS: Record<RuntimeStatus['reason'], string> = {
   'no-runtime': 'CloudCLI is not running.',
   'foreign-instance': 'A CloudCLI server is running, but this install has no record of starting it.',
   verified: 'Running, and confirmed to be this installation.',
+  'app-not-ready': "CloudCLI's server is running, but the app hasn't been built yet.",
   'unverified-identity': 'A CloudCLI server is running, but it is too old to confirm its identity.',
   'instance-mismatch': 'A different CloudCLI instance is using this port.',
   'stale-marker': 'The previous server is gone; only its leftover record remains.',
