@@ -31,6 +31,19 @@ export type LocalServerMarker = RuntimeIdentity & {
 export type RuntimeHealth = {
   instanceId: string | null;
   startedAt: string | null;
+  /**
+   * Whether this server can actually serve the app it fronts — concretely,
+   * whether `dist/index.html` exists. A backend can be perfectly healthy
+   * (accepting connections, answering JSON) while this is false: launchers
+   * that only start the backend process (the Android Runtime Controller's
+   * `exec node dist-server/server/index.js`, never a `vite`/build step)
+   * produce exactly that split, and it is invisible to a check that only
+   * asks "does /health respond". Missing from the payload (a server built
+   * before this field existed) reads as `true`, the same "don't punish an
+   * older server for not knowing about a newer check" rule already applied
+   * to a missing `instanceId`.
+   */
+  appReady: boolean;
 };
 
 export const LOCAL_SERVER_MARKER_RELATIVE_PATH = ['.cloudcli', 'local-server.json'] as const;
@@ -146,5 +159,6 @@ export function parseRuntimeHealth(raw: unknown): RuntimeHealth | null {
   return {
     instanceId: runtime ? readString(runtime.instanceId) : null,
     startedAt: runtime ? readString(runtime.startedAt) : null,
+    appReady: typeof record.appReady === 'boolean' ? record.appReady : true,
   };
 }

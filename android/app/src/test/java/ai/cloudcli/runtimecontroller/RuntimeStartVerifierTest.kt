@@ -56,6 +56,16 @@ class RuntimeStartVerifierTest {
         pid = 99,
     )
 
+    /** Backend verified as ours, but with no client build to serve — never a launch target. */
+    private fun appNotReady() = RuntimeStatusInfo(
+        state = "error",
+        reason = "app-not-ready",
+        ownedByMarker = true,
+        instanceId = "instance-a",
+        url = "http://127.0.0.1:3001",
+        pid = 4242,
+    )
+
     /** A monotonic clock [wait] advances directly, so no test here really sleeps. */
     private class FakeClock {
         var nowMs: Long = 0
@@ -150,6 +160,47 @@ class RuntimeStartVerifierTest {
 
         assertEquals(0, dispatcher.callCount)
         assertTrue(result is AdapterOutcome.Failure)
+    }
+
+    @Test
+    fun `app-not-ready is refused without dispatching a second server on top of it`() = runTest {
+        val clock = FakeClock()
+        val dispatcher = FakeDispatcher()
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = appNotReady(),
+            dispatchServer = dispatcher.dispatch,
+            pollStatus = { error("status should never be polled when refusing to start") },
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+        )
+
+        assertEquals(0, dispatcher.callCount)
+        assertTrue(result is AdapterOutcome.Failure)
+        assertTrue((result as AdapterOutcome.Failure).userMessage.contains("hasn't been built"))
+    }
+
+    @Test
+    fun `app-not-ready appearing while waiting for our own launch fails fast, never claims online`() = runTest {
+        val clock = FakeClock()
+        val dispatcher = FakeDispatcher()
+        val statuses = FakeStatusSequence(listOf(AdapterOutcome.Success(appNotReady())))
+
+        val result = RuntimeStartVerifier.start(
+            preflightStatus = stopped(),
+            dispatchServer = dispatcher.dispatch,
+            pollStatus = statuses.poll,
+            wait = clock.wait,
+            onStep = {},
+            elapsedMs = clock.elapsed,
+        )
+
+        assertEquals(1, dispatcher.callCount)
+        assertTrue(result is AdapterOutcome.Failure)
+        assertTrue((result as AdapterOutcome.Failure).userMessage.contains("hasn't been built"))
+        // Fails immediately instead of burning the whole 90s timeout.
+        assertTrue(clock.nowMs < RuntimeStartVerifier.Policy().serverOnlineTimeoutMs)
     }
 
     @Test

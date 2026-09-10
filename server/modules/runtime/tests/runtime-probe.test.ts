@@ -98,6 +98,14 @@ test('a rejected health request degrades to no evidence rather than throwing', a
   assert.notEqual(evidence.marker, null);
 });
 
+test('appReady: false from a live backend reaches the collected evidence unchanged', async () => {
+  const probe = createProbe({ fetchHealth: async () => ({ ...HEALTHY, appReady: false }) });
+
+  const evidence = await probe.collect();
+
+  assert.equal(evidence.health?.appReady, false);
+});
+
 test('a non-CloudCLI responder is not accepted as health evidence', async () => {
   const probe = createProbe({ fetchHealth: async () => ({ status: 'ok' }) });
 

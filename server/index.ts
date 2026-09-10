@@ -165,6 +165,13 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         installMode,
         version: RUNNING_VERSION,
+        // Whether this process can actually serve the app, not just answer
+        // JSON. A runtime launcher that only starts this backend (the Android
+        // Runtime Controller never runs `vite` or `npm run build`) can produce
+        // a server that is "healthy" and permanently unable to show anyone
+        // the app it fronts; a readiness check that stops at this endpoint
+        // responding would call that ONLINE.
+        appReady: fs.existsSync(path.join(APP_ROOT, 'dist', 'index.html')),
         runtime: {
             instanceId: RUNTIME_IDENTITY.instanceId,
             startedAt: RUNTIME_IDENTITY.startedAt,

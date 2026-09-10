@@ -20,7 +20,7 @@ const MARKER: LocalServerMarker = {
 
 const ONLINE: RuntimeEvidence = {
   marker: MARKER,
-  health: { instanceId: 'instance-a', startedAt: MARKER.startedAt },
+  health: { instanceId: 'instance-a', startedAt: MARKER.startedAt, appReady: true },
   processAlive: null,
 };
 const GONE: RuntimeEvidence = { marker: null, health: null, processAlive: null };

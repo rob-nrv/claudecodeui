@@ -118,6 +118,7 @@ class RuntimeController(
 
     private fun humanReason(reason: String): String = when (reason) {
         "instance-mismatch" -> "A different, unrecognised process is using CloudCLI's port."
+        "app-not-ready" -> "CloudCLI's server is running, but the app hasn't been built yet."
         "health-timeout" -> "CloudCLI's process is running but never became healthy."
         "start-timeout" -> "CloudCLI didn't come up in time."
         "stop-timeout" -> "CloudCLI didn't stop in time."

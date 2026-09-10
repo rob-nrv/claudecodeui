@@ -23,8 +23,8 @@ function markerAt(offsetMs: number, overrides: Partial<LocalServerMarker> = {}):
   };
 }
 
-function health(instanceId: string | null): RuntimeHealth {
-  return { instanceId, startedAt: '2026-08-28T11:59:00.000Z' };
+function health(instanceId: string | null, appReady = true): RuntimeHealth {
+  return { instanceId, startedAt: '2026-08-28T11:59:00.000Z', appReady };
 }
 
 function resolve(evidence: Partial<RuntimeEvidence>, intent?: Parameters<typeof resolveRuntimeStatus>[0]['intent']) {
@@ -75,6 +75,23 @@ test('a marker with no identity cannot claim a healthy server either', () => {
 
   assert.equal(status.state, 'online');
   assert.equal(status.reason, 'unverified-identity');
+  assert.equal(status.ownedByMarker, false);
+});
+
+test('a verified backend that cannot serve the app is not online, but stays ours to stop', () => {
+  const status = resolve({ marker: markerAt(60_000), health: health('instance-a', false) });
+
+  assert.equal(status.state, 'error');
+  assert.equal(status.reason, 'app-not-ready');
+  assert.equal(status.ownedByMarker, true);
+  assert.equal(status.pid, 4242);
+});
+
+test('a marker-less backend that cannot serve the app is reported, not claimed online', () => {
+  const status = resolve({ health: health('instance-a', false) });
+
+  assert.equal(status.state, 'error');
+  assert.equal(status.reason, 'app-not-ready');
   assert.equal(status.ownedByMarker, false);
 });
 
@@ -159,6 +176,16 @@ test('a start that runs past its deadline fails instead of spinning', () => {
 
   assert.equal(status.state, 'error');
   assert.equal(status.reason, 'start-timeout');
+});
+
+test('a start blocked by a backend that came up without the app never waits out the timeout', () => {
+  const status = resolve(
+    { marker: markerAt(1_000), health: health('instance-a', false) },
+    { kind: 'start', since: NOW.toISOString(), deadlineMs: 60_000 },
+  );
+
+  assert.equal(status.state, 'error');
+  assert.equal(status.reason, 'app-not-ready');
 });
 
 test('a start blocked by another instance reports that reason immediately', () => {

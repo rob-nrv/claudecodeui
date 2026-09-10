@@ -131,7 +131,7 @@ test('health parses the runtime identity a live server publishes', () => {
       installMode: 'git',
       runtime: { instanceId: 'instance-a', startedAt: '2026-08-28T10:00:00.000Z' },
     }),
-    { instanceId: 'instance-a', startedAt: '2026-08-28T10:00:00.000Z' },
+    { instanceId: 'instance-a', startedAt: '2026-08-28T10:00:00.000Z', appReady: true },
   );
 });
 
@@ -139,7 +139,20 @@ test('health from a server without a runtime block parses with a null identity',
   assert.deepEqual(parseRuntimeHealth({ status: 'ok', installMode: 'git' }), {
     instanceId: null,
     startedAt: null,
+    appReady: true,
   });
+});
+
+test('health reports appReady: false for a backend with no client build to serve', () => {
+  assert.deepEqual(
+    parseRuntimeHealth({ status: 'ok', installMode: 'git', appReady: false }),
+    { instanceId: null, startedAt: null, appReady: false },
+  );
+});
+
+test('health from a server built before appReady existed defaults to ready', () => {
+  const parsed = parseRuntimeHealth({ status: 'ok', installMode: 'git' });
+  assert.equal(parsed?.appReady, true);
 });
 
 test('a responder that is not CloudCLI never parses as health', () => {

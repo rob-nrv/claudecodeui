@@ -17,6 +17,8 @@ export type RuntimeStatusReason =
   | 'foreign-instance'
   /** Marker identity and /health identity agree: this is our runtime. */
   | 'verified'
+  /** The server answers and identity is verified, but it cannot serve the app itself. */
+  | 'app-not-ready'
   /** A CloudCLI answers but predates instance identity, so ownership is unprovable. */
   | 'unverified-identity'
   /** Another CloudCLI instance holds the port our marker points at. */
@@ -88,20 +90,27 @@ function resolveObservedStatus(
   };
 
   if (!marker) {
-    return health
-      // Something is serving CloudCLI without a marker we can act on: honest to
-      // report it up, dishonest to offer Stop for it.
+    if (!health) return { state: 'stopped', reason: 'no-runtime', ownedByMarker: false, ...base };
+    // Something is serving CloudCLI without a marker we can act on: honest to
+    // report it up, dishonest to offer Stop for it.
+    return health.appReady
       ? { state: 'online', reason: 'foreign-instance', ownedByMarker: false, instanceId: health.instanceId, url: null, pid: null }
-      : { state: 'stopped', reason: 'no-runtime', ownedByMarker: false, ...base };
+      : { state: 'error', reason: 'app-not-ready', ownedByMarker: false, instanceId: health.instanceId, url: null, pid: null };
   }
 
   if (health) {
     if (!marker.instanceId || !health.instanceId) {
       return { state: 'online', reason: 'unverified-identity', ownedByMarker: false, ...base };
     }
-    return marker.instanceId === health.instanceId
+    if (marker.instanceId !== health.instanceId) {
+      return { state: 'error', reason: 'instance-mismatch', ownedByMarker: false, ...base, instanceId: health.instanceId };
+    }
+    // Identity is provably ours from here on. A backend that cannot serve the
+    // app is still ours to stop and retry, so ownership stays true even though
+    // ONLINE must not be claimed.
+    return health.appReady
       ? { state: 'online', reason: 'verified', ownedByMarker: true, ...base }
-      : { state: 'error', reason: 'instance-mismatch', ownedByMarker: false, ...base, instanceId: health.instanceId };
+      : { state: 'error', reason: 'app-not-ready', ownedByMarker: true, ...base };
   }
 
   // A provably dead process settles the question regardless of how young the marker is.
@@ -142,9 +151,10 @@ export function resolveRuntimeStatus(input: {
 
   if (intent.kind === 'start') {
     if (observed.state === 'online') return observed;
-    // A different CloudCLI on our port is the actual reason the start cannot
-    // succeed, so surface it now instead of spinning until the deadline.
-    if (observed.reason === 'instance-mismatch') return observed;
+    // A different CloudCLI on our port, or a server that came up without an
+    // app to serve, is the actual reason the start cannot succeed — surface it
+    // now instead of spinning until the deadline.
+    if (observed.reason === 'instance-mismatch' || observed.reason === 'app-not-ready') return observed;
     return isWithin(intent.since, intent.deadlineMs, now)
       ? { ...observed, state: 'starting', reason: 'start-pending' }
       : { ...observed, state: 'error', reason: 'start-timeout' };

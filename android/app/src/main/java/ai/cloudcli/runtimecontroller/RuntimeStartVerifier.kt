@@ -110,6 +110,15 @@ object RuntimeStartVerifier {
                 details = "status reported state=${preflightStatus.state} reason=${preflightStatus.reason}.",
             )
         }
+        // B2. Our own backend is already up and verified, but it has no app to
+        // serve (no client build). Launching a second server on top of it would
+        // not fix that — the missing build is the actual problem.
+        if (preflightStatus.reason == "app-not-ready") {
+            return AdapterOutcome.Failure(
+                userMessage = "CloudCLI's server is running, but the app hasn't been built.",
+                details = "status reported state=${preflightStatus.state} reason=app-not-ready.",
+            )
+        }
 
         // C. Genuinely stopped: dispatch. If a start already looked in flight
         // (fresh marker, no health yet), don't launch a second server on top
@@ -140,6 +149,12 @@ object RuntimeStartVerifier {
                             userMessage = "Something else is already using CloudCLI's port.",
                             details = "status reported state=${status.state} reason=${status.reason} " +
                                 "while waiting for our own launch to come online.",
+                        )
+                    }
+                    if (status.reason == "app-not-ready") {
+                        return AdapterOutcome.Failure(
+                            userMessage = "CloudCLI's server is running, but the app hasn't been built.",
+                            details = "status reported reason=app-not-ready while waiting for our own launch to come online.",
                         )
                     }
                 }
