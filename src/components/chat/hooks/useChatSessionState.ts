@@ -19,7 +19,8 @@ interface UseChatSessionStateArgs {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   ws: WebSocket | null;
-  sendMessage: (message: unknown) => void;
+  /** Returns whether the frame was actually sent (`false` if the socket wasn't open). */
+  sendMessage: (message: unknown) => boolean;
   externalMessageUpdate?: number;
   newSessionTrigger?: number;
   processingSessions?: SessionActivityMap;

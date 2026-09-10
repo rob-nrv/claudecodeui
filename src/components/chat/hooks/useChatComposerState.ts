@@ -20,7 +20,15 @@ import {
   safeLocalStorage,
   writeQueuedMessage,
   type QueuedSendOptions,
+  type StoredQueuedMessage,
 } from '../utils/chatStorage';
+import {
+  claimQueuedMessageOnServer,
+  clearQueuedMessageOnServer,
+  fetchQueuedMessage,
+  restoreQueuedMessageOnServer,
+  saveQueuedMessageOnServer,
+} from '../utils/queuedMessageApi';
 import type {
   ChatAttachment,
   ChatMessage,
@@ -59,7 +67,8 @@ interface UseChatComposerStateArgs {
   processingSessions?: SessionActivityMap;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
-  sendMessage: (message: unknown) => void;
+  /** Returns whether the frame was actually sent (`false` if the socket wasn't open). */
+  sendMessage: (message: unknown) => boolean;
   sendByCtrlEnter?: boolean;
   onSessionProcessing?: MarkSessionProcessing;
   /**
@@ -284,7 +293,7 @@ export function useChatComposerState({
     ((
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
       queuedSubmission?: QueuedDraft,
-    ) => Promise<void>) | null
+    ) => Promise<boolean | void>) | null
   >(null);
   const inputValueRef = useRef(input);
   const selectedProjectId = selectedProject?.projectId;
@@ -731,10 +740,17 @@ export function useChatComposerState({
         if (queuedSessionKey) {
           // Write the claim ticket synchronously after upload; this closes the
           // gap before React's persistence effect runs.
-          writeQueuedMessage(queuedSessionKey, {
+          const storedMessage: StoredQueuedMessage = {
             content: durableDraft.content,
             options: durableDraft.options,
             attachments: durableDraft.uploadedAttachments,
+          };
+          writeQueuedMessage(queuedSessionKey, storedMessage);
+          // Best-effort: the server row is the authoritative queue (survives
+          // a closed tab or cleared storage); localStorage above is only the
+          // same-tab optimistic mirror.
+          saveQueuedMessageOnServer(queuedSessionKey, storedMessage).catch((error) => {
+            console.error('Failed to persist queued message on the server:', error);
           });
         }
 
@@ -921,7 +937,7 @@ export function useChatComposerState({
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
       // session row; `options` only carries composer-level preferences.
-      sendMessage({
+      const delivered = sendMessage({
         type: 'chat.send',
         sessionId: targetSessionId,
         content: messageContent,
@@ -944,6 +960,9 @@ export function useChatComposerState({
       }
 
       safeLocalStorage.removeItem(`draft_input_${selectedProject.projectId}`);
+      // Lets a queued-message dispatch (the only caller that passes
+      // `queuedSubmission`) know whether it needs to restore its server claim.
+      return delivered;
     },
     [
       selectedSession,
@@ -999,18 +1018,63 @@ export function useChatComposerState({
     // still live (the cleanup below cancels the send in that case).
     const delay = wasLoading ? 0 : 750;
     const timer = setTimeout(() => {
-      // The saved key is the claim ticket shared with the app-level auto-send
-      // (which handles sessions that finish while not viewed). If it's gone,
-      // the message was already dispatched — don't send it twice.
-      if (sessionKey && !readQueuedMessage(sessionKey)) {
+      if (!sessionKey) {
         setQueuedDraft(null);
         return;
       }
-      setQueuedDraft(null);
-      setInput(queuedDraft.content);
-      inputValueRef.current = queuedDraft.content;
-      setAttachedFiles(queuedDraft.attachments);
-      handleSubmitRef.current?.(createFakeSubmitEvent(), queuedDraft);
+      // The server row is the claim ticket shared with the app-level
+      // auto-send (which handles sessions that finish while not viewed) and
+      // with any other open tab/device. Only a successful claim may dispatch
+      // — this is what makes double-send impossible even across tabs, not
+      // just within this composer.
+      fetchQueuedMessage(sessionKey)
+        .then((fetched) => {
+          const claimToken = fetched.claimToken;
+          if (!claimToken) {
+            // Already claimed elsewhere (or never made it to the server).
+            setQueuedDraft(null);
+            return null;
+          }
+          return claimQueuedMessageOnServer(sessionKey, claimToken).then((claimResult) => ({
+            claimToken,
+            claimResult,
+          }));
+        })
+        .then((claimed) => {
+          if (!claimed) {
+            return;
+          }
+          const { claimToken, claimResult } = claimed;
+          if (!claimResult.claimed || !claimResult.message) {
+            // Another tab/path claimed it first — don't send a duplicate.
+            setQueuedDraft(null);
+            return;
+          }
+          clearQueuedMessage(sessionKey);
+          const claimedMessage = claimResult.message;
+          const dispatchDraft: QueuedDraft = {
+            content: claimedMessage.content,
+            attachments: [],
+            uploadedAttachments: claimedMessage.attachments,
+            options: claimedMessage.options,
+          };
+          setQueuedDraft(null);
+          setInput(dispatchDraft.content);
+          inputValueRef.current = dispatchDraft.content;
+          setAttachedFiles([]);
+          Promise.resolve(handleSubmitRef.current?.(createFakeSubmitEvent(), dispatchDraft)).then((delivered) => {
+            if (delivered === false) {
+              // The socket wasn't open when we tried to send: put the claimed
+              // message back instead of losing it silently.
+              restoreQueuedMessageOnServer(sessionKey, claimToken).catch((error) => {
+                console.error('Failed to restore an undelivered queued message:', error);
+              });
+            }
+          });
+        })
+        .catch((error) => {
+          console.error('Failed to claim queued message for dispatch:', error);
+        });
     }, delay);
     return () => clearTimeout(timer);
   }, [isLoading, queuedDraft, sessionKey, setInput]);
@@ -1081,13 +1145,20 @@ export function useChatComposerState({
       queuedDraft
       && (queuedDraft.content.trim() || (queuedDraft.uploadedAttachments?.length ?? 0) > 0)
     ) {
-      writeQueuedMessage(sessionKey, {
+      const storedMessage: StoredQueuedMessage = {
         content: queuedDraft.content,
         options: queuedDraft.options,
         attachments: queuedDraft.uploadedAttachments,
+      };
+      writeQueuedMessage(sessionKey, storedMessage);
+      saveQueuedMessageOnServer(sessionKey, storedMessage).catch((error) => {
+        console.error('Failed to persist queued message on the server:', error);
       });
     } else {
       clearQueuedMessage(sessionKey);
+      clearQueuedMessageOnServer(sessionKey).catch((error) => {
+        console.error('Failed to clear queued message on the server:', error);
+      });
     }
   }, [queuedDraft, sessionKey]);
 
@@ -1101,6 +1172,43 @@ export function useChatComposerState({
       return;
     }
     setQueuedDraft(restoreQueuedDraft(sessionKey));
+  }, [sessionKey]);
+
+  // Reconciles the local (localStorage) mirror against the server, which is
+  // the authoritative queue. Runs after the synchronous local restore above,
+  // so a queue claimed while this tab was closed (or queued from another
+  // device, or lost to cleared storage) doesn't leave a stale or missing
+  // card once the server responds.
+  useEffect(() => {
+    if (!sessionKey) {
+      return;
+    }
+    const reconcileSessionKey = sessionKey;
+    let cancelled = false;
+    fetchQueuedMessage(reconcileSessionKey)
+      .then(({ message }) => {
+        if (cancelled || queuedDraftSessionRef.current !== reconcileSessionKey) {
+          return;
+        }
+        if (message) {
+          writeQueuedMessage(reconcileSessionKey, message);
+          setQueuedDraft({
+            content: message.content,
+            attachments: [],
+            uploadedAttachments: message.attachments,
+            options: message.options,
+          });
+        } else if (readQueuedMessage(reconcileSessionKey)) {
+          clearQueuedMessage(reconcileSessionKey);
+          setQueuedDraft(null);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to reconcile queued message with the server:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [sessionKey]);
 
   useEffect(() => {

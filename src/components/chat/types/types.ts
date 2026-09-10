@@ -131,7 +131,8 @@ export interface ChatInterfaceProps {
   /** The Claude account a brand-new session should be created under; ignored once a session exists. */
   claudeProfileId?: string | null;
   ws: WebSocket | null;
-  sendMessage: (message: unknown) => void;
+  /** Returns whether the frame was actually sent (`false` if the socket wasn't open). */
+  sendMessage: (message: unknown) => boolean;
   onFileOpen?: (filePath: string, diffInfo?: any) => void;
   onInputFocusChange?: (focused: boolean) => void;
   onSessionProcessing?: MarkSessionProcessing;

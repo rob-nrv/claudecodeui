@@ -185,6 +185,23 @@ CREATE TABLE IF NOT EXISTS claude_profiles (
 );
 `;
 
+/**
+ * Server-side single-slot "send after this run finishes" queue (FT-M03 Queue
+ * 2.0 foundations). One row per session holds at most one pending message;
+ * `content` is an opaque JSON blob (`{content, options, attachments}`) so the
+ * row's shape never has to change when the composer adds new option fields.
+ * Presence of the row IS the "queued" state — there is no separate status
+ * column, matching the single-slot semantics the composer already has.
+ */
+export const QUEUED_MESSAGES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS queued_messages (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    content TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -235,4 +252,6 @@ ON provider_models(provider, sort_order, id);
 
 ${CLAUDE_PROFILES_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_claude_profiles_is_default ON claude_profiles(is_default);
+
+${QUEUED_MESSAGES_TABLE_SCHEMA_SQL}
 `;

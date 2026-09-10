@@ -288,3 +288,114 @@ test('model routes expose immutable defaults and full custom model CRUD', async 
     );
   });
 });
+
+// FT-M03 Queue 2.0 foundations: server-side "send after this run finishes"
+// queue. These cover the HTTP surface; CAS atomicity itself is covered at the
+// repository level in queued-messages.db.integration.test.ts.
+test('queued-message route returns null for a session with nothing queued', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    sessionsDb.createAppSession('session-empty-queue', 'claude', workspacePath);
+
+    const response = await fetch(`${baseUrl}/api/providers/sessions/session-empty-queue/queued-message`);
+    const payload = await response.json() as { data: { message: unknown; claimToken: string | null } };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.message, null);
+    assert.equal(payload.data.claimToken, null);
+  });
+});
+
+test('queued-message route rejects an unknown session', async () => {
+  await withProviderServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/providers/sessions/no-such-session/queued-message`);
+    const payload = await response.json() as { error: { code: string } };
+
+    assert.equal(response.status, 404);
+    assert.equal(payload.error.code, 'SESSION_NOT_FOUND');
+  });
+});
+
+test('queued-message route rejects a payload with no content', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    sessionsDb.createAppSession('session-bad-payload', 'claude', workspacePath);
+
+    const response = await fetch(`${baseUrl}/api/providers/sessions/session-bad-payload/queued-message`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ options: { model: 'sonnet' } }),
+    });
+    const payload = await response.json() as { error: { code: string } };
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.error.code, 'QUEUED_MESSAGE_CONTENT_REQUIRED');
+  });
+});
+
+test('save, claim, and restore round-trip through the HTTP surface', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    sessionsDb.createAppSession('session-queue-flow', 'claude', workspacePath);
+    const base = `${baseUrl}/api/providers/sessions/session-queue-flow/queued-message`;
+
+    const saveResponse = await fetch(base, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'ship it', options: { model: 'sonnet' }, attachments: [] }),
+    });
+    assert.equal(saveResponse.status, 200);
+
+    const getResponse = await fetch(base);
+    const getPayload = await getResponse.json() as {
+      data: { message: { content: string }; claimToken: string };
+    };
+    assert.equal(getPayload.data.message.content, 'ship it');
+    assert.ok(getPayload.data.claimToken);
+
+    // A stale token (e.g. from a page that hasn't refetched) must not claim.
+    const staleClaimResponse = await fetch(`${base}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ claimToken: '{"content":"stale"}' }),
+    });
+    const staleClaimPayload = await staleClaimResponse.json() as { data: { claimed: boolean } };
+    assert.equal(staleClaimPayload.data.claimed, false);
+
+    const claimResponse = await fetch(`${base}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ claimToken: getPayload.data.claimToken }),
+    });
+    const claimPayload = await claimResponse.json() as {
+      data: { claimed: boolean; message: { content: string } | null };
+    };
+    assert.equal(claimPayload.data.claimed, true);
+    assert.equal(claimPayload.data.message?.content, 'ship it');
+
+    // A second claim of the same token must fail: it was already delivered.
+    const secondClaimResponse = await fetch(`${base}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ claimToken: getPayload.data.claimToken }),
+    });
+    const secondClaimPayload = await secondClaimResponse.json() as { data: { claimed: boolean } };
+    assert.equal(secondClaimPayload.data.claimed, false);
+
+    // Simulate a failed delivery: restore the claimed message.
+    const restoreResponse = await fetch(`${base}/restore`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ claimToken: getPayload.data.claimToken }),
+    });
+    assert.equal(restoreResponse.status, 200);
+
+    const afterRestoreResponse = await fetch(base);
+    const afterRestorePayload = await afterRestoreResponse.json() as { data: { message: { content: string } } };
+    assert.equal(afterRestorePayload.data.message.content, 'ship it');
+
+    const deleteResponse = await fetch(base, { method: 'DELETE' });
+    assert.equal(deleteResponse.status, 200);
+
+    const afterDeleteResponse = await fetch(base);
+    const afterDeletePayload = await afterDeleteResponse.json() as { data: { message: unknown } };
+    assert.equal(afterDeletePayload.data.message, null);
+  });
+});

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { clearQueuedMessage, readQueuedMessage } from '../components/chat/utils/chatStorage';
+import { claimQueuedMessageOnServer, fetchQueuedMessage } from '../components/chat/utils/queuedMessageApi';
 
 import type { MarkSessionProcessing, SessionActivityMap } from './useSessionProtection';
 
@@ -13,7 +14,8 @@ interface UseQueuedMessageAutoSendArgs {
    */
   activeSessionId: string | null;
   ws: WebSocket | null;
-  sendMessage: (message: unknown) => void;
+  /** Returns whether the frame was actually sent (`false` if the socket wasn't open). */
+  sendMessage: (message: unknown) => boolean;
   markSessionProcessing: MarkSessionProcessing;
 }
 
@@ -21,11 +23,13 @@ interface UseQueuedMessageAutoSendArgs {
  * Dispatches queued messages for sessions the user is NOT currently viewing.
  *
  * The composer persists each queued draft (text + send options snapshotted at
- * queue time) under `queued_message_<sessionId>`. When a session's run leaves
- * the processing map — its previous response completed — this hook sends that
- * session's queued message immediately instead of waiting for the user to
- * open the session again. Removing the storage key before sending is the
- * claim that keeps the composer's own flush from double-sending.
+ * queue time) both to localStorage (`queued_message_<sessionId>`, a same-tab
+ * optimistic mirror) and to the server (the authoritative queue). When a
+ * session's run leaves the processing map — its previous response completed
+ * — this hook sends that session's queued message immediately instead of
+ * waiting for the user to open the session again. Atomically claiming the
+ * server row before sending is what keeps the composer's own flush (or
+ * another tab/device) from double-sending.
  */
 export function useQueuedMessageAutoSend({
   processingSessions,
@@ -57,14 +61,38 @@ export function useQueuedMessageAutoSend({
         continue;
       }
 
-      clearQueuedMessage(sessionId);
-      sendMessage({
-        type: 'chat.send',
-        sessionId,
-        content: queued.content,
-        options: { ...(queued.options ?? {}), attachments: queued.attachments ?? queued.images ?? [] },
-      });
-      markSessionProcessing(sessionId, { statusText: null, canInterrupt: true });
+      // The server row is the claim ticket shared with the composer's own
+      // flush (and any other open tab/device). Only a successful claim may
+      // dispatch, so the two paths can never both send this session's draft.
+      fetchQueuedMessage(sessionId)
+        .then((fetched) => {
+          if (!fetched.claimToken) {
+            clearQueuedMessage(sessionId);
+            return null;
+          }
+          return claimQueuedMessageOnServer(sessionId, fetched.claimToken);
+        })
+        .then((claimResult) => {
+          if (!claimResult) {
+            return;
+          }
+          if (!claimResult.claimed || !claimResult.message) {
+            clearQueuedMessage(sessionId);
+            return;
+          }
+          clearQueuedMessage(sessionId);
+          const claimedMessage = claimResult.message;
+          sendMessage({
+            type: 'chat.send',
+            sessionId,
+            content: claimedMessage.content,
+            options: { ...(claimedMessage.options ?? {}), attachments: claimedMessage.attachments ?? [] },
+          });
+          markSessionProcessing(sessionId, { statusText: null, canInterrupt: true });
+        })
+        .catch((error) => {
+          console.error('Failed to claim queued message for dispatch:', error);
+        });
     }
   }, [processingSessions, activeSessionId, ws, sendMessage, markSessionProcessing]);
 }

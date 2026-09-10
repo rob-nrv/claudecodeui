@@ -6,6 +6,7 @@ import { providerMcpService } from '@/modules/providers/services/mcp.service.js'
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerRuntimeService } from '@/modules/providers/services/provider-runtime.service.js';
 import { providerTokenUsageService } from '@/modules/providers/services/provider-token-usage.service.js';
+import { queuedMessagesService } from '@/modules/providers/services/queued-messages.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
@@ -759,6 +760,62 @@ router.get(
     const sessionId = parseSessionId(req.params.sessionId);
     const result = await providerTokenUsageService.getSessionTokenUsage(sessionId);
     res.json(createApiSuccessResponse(result));
+  }),
+);
+
+// FT-M03 Queue 2.0 foundations: server-side single-slot "send after this run
+// finishes" queue, so the composer's queued draft survives a lost browser tab
+// or cleared storage, and dispatch claims are atomic across tabs/devices.
+router.get(
+  '/sessions/:sessionId/queued-message',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const snapshot = queuedMessagesService.get(sessionId);
+    res.json(createApiSuccessResponse({
+      message: snapshot?.message ?? null,
+      claimToken: snapshot?.claimToken ?? null,
+    }));
+  }),
+);
+
+router.put(
+  '/sessions/:sessionId/queued-message',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    queuedMessagesService.save(sessionId, req.body);
+    res.json(createApiSuccessResponse({ saved: true }));
+  }),
+);
+
+router.delete(
+  '/sessions/:sessionId/queued-message',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    queuedMessagesService.clear(sessionId);
+    res.json(createApiSuccessResponse({ cleared: true }));
+  }),
+);
+
+router.post(
+  '/sessions/:sessionId/queued-message/claim',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const body = req.body as { claimToken?: unknown };
+    const snapshot = queuedMessagesService.claim(sessionId, body?.claimToken);
+    res.json(createApiSuccessResponse({
+      claimed: snapshot !== null,
+      message: snapshot?.message ?? null,
+    }));
+  }),
+);
+
+router.post(
+  '/sessions/:sessionId/queued-message/restore',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const body = req.body as { claimToken?: unknown };
+    queuedMessagesService.restore(sessionId, body?.claimToken);
+    res.json(createApiSuccessResponse({ restored: true }));
   }),
 );
 
