@@ -6,6 +6,15 @@ import { showCompletionTitleIndicator } from '../../../utils/pageTitleNotificati
 import { playChatCompletionSound, playNotificationSound } from '../../../utils/notificationSound';
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest } from '../types/types';
+import {
+  addPermissionRequest,
+  applyPermissionResponseAck,
+  applyPermissionSnapshot,
+  clearOpenPermissionRequests,
+  expirePermissionRequest,
+  isAwaitingPermissionDecision,
+  removePermissionRequest,
+} from '../utils/permissionRequestState';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 
@@ -13,8 +22,9 @@ const isActionablePermissionRequest = (request: { toolName?: unknown } | null | 
   return request?.toolName !== 'ExitPlanMode' && request?.toolName !== 'exit_plan_mode';
 };
 
-const hasActionablePermissionRequests = (requests: Array<{ toolName?: unknown }> | null | undefined): boolean => {
-  return Array.isArray(requests) && requests.some((request) => isActionablePermissionRequest(request));
+const hasActionablePermissionRequests = (requests: PendingPermissionRequest[] | null | undefined): boolean => {
+  return Array.isArray(requests)
+    && requests.some((request) => isActionablePermissionRequest(request) && isAwaitingPermissionDecision(request));
 };
 
 interface UseChatRealtimeHandlersArgs {
@@ -26,6 +36,8 @@ interface UseChatRealtimeHandlersArgs {
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
   pendingPermissionRequests: PendingPermissionRequest[];
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  /** Expired approvals dismissed in this tab; a snapshot must not surface them again. */
+  dismissedPermissionRequestIdsRef: MutableRefObject<Set<string>>;
   streamTimerRef: MutableRefObject<number | null>;
   accumulatedStreamRef: MutableRefObject<string>;
   /**
@@ -66,6 +78,7 @@ export function useChatRealtimeHandlers({
   setTokenBudget,
   pendingPermissionRequests,
   setPendingPermissionRequests,
+  dismissedPermissionRequestIdsRef,
   streamTimerRef,
   accumulatedStreamRef,
   lastSeqRef,
@@ -133,17 +146,33 @@ export function useChatRealtimeHandlers({
 
           const isViewedSession = sid === activeViewSessionId;
           if (isViewedSession && Array.isArray(msg.pendingPermissions)) {
-            const nextPendingPermissionRequests = msg.pendingPermissions as PendingPermissionRequest[];
+            // The server snapshot is authoritative for what is still pending;
+            // its recent outcomes settle whatever this client missed.
+            const snapshot = {
+              pendingPermissions: msg.pendingPermissions,
+              recentPermissionOutcomes: msg.recentPermissionOutcomes,
+            };
+            const reconcile = (requests: PendingPermissionRequest[]) =>
+              applyPermissionSnapshot(requests, sid, snapshot, dismissedPermissionRequestIdsRef.current);
             const hadActionablePermissionRequests = hasActionablePermissionRequests(pendingPermissionRequestsRef.current);
-            const hasPendingActionablePermissionRequests = hasActionablePermissionRequests(nextPendingPermissionRequests);
+            const nextPendingPermissionRequests = reconcile(pendingPermissionRequestsRef.current);
 
             pendingPermissionRequestsRef.current = nextPendingPermissionRequests;
-            setPendingPermissionRequests(nextPendingPermissionRequests);
+            setPendingPermissionRequests(reconcile);
 
-            if (hasPendingActionablePermissionRequests && !hadActionablePermissionRequests) {
+            if (hasActionablePermissionRequests(nextPendingPermissionRequests) && !hadActionablePermissionRequests) {
               void playNotificationSound();
             }
           }
+          return;
+        }
+
+        case 'permission_response_ack': {
+          // Server verdict on an answer sent from this socket: applied, or why
+          // it no longer applies (answered elsewhere, expired, gone).
+          const ack = { requestId: msg.requestId, accepted: msg.accepted, reason: msg.reason };
+          pendingPermissionRequestsRef.current = applyPermissionResponseAck(pendingPermissionRequestsRef.current, ack);
+          setPendingPermissionRequests((previous) => applyPermissionResponseAck(previous, ack));
           return;
         }
 
@@ -218,7 +247,8 @@ export function useChatRealtimeHandlers({
         msg.kind !== 'complete'
         && msg.kind !== 'status'
         && msg.kind !== 'permission_request'
-        && msg.kind !== 'permission_cancelled';
+        && msg.kind !== 'permission_cancelled'
+        && msg.kind !== 'permission_resolved';
 
       if (sid && shouldPersist) {
         sessionStore.appendRealtime(sid, msg as unknown as NormalizedMessage);
@@ -244,8 +274,9 @@ export function useChatRealtimeHandlers({
           // hides it immediately and atomically.
           onSessionIdle?.(sid);
           if (sid === activeViewSessionId) {
-            pendingPermissionRequestsRef.current = [];
-            setPendingPermissionRequests([]);
+            // Nothing is answerable once the run ended; expired notices stay.
+            pendingPermissionRequestsRef.current = clearOpenPermissionRequests(pendingPermissionRequestsRef.current);
+            setPendingPermissionRequests(clearOpenPermissionRequests);
           }
 
           if (msg.aborted) {
@@ -281,20 +312,17 @@ export function useChatRealtimeHandlers({
           }
 
           if (sid === activeViewSessionId) {
-            const previousPendingPermissionRequests = pendingPermissionRequestsRef.current;
-            if (!previousPendingPermissionRequests.some((request) => request.requestId === msg.requestId)) {
-              const nextPendingPermissionRequests = [...previousPendingPermissionRequests, {
-                requestId: msg.requestId as string,
-                toolName: (msg.toolName as string) || 'UnknownTool',
-                input: msg.input,
-                context: msg.context,
-                sessionId: sid || null,
-                receivedAt: new Date(),
-              }];
-
-              pendingPermissionRequestsRef.current = nextPendingPermissionRequests;
-              setPendingPermissionRequests(nextPendingPermissionRequests);
-            }
+            const incoming: PendingPermissionRequest = {
+              requestId: msg.requestId as string,
+              toolName: (msg.toolName as string) || 'UnknownTool',
+              input: msg.input,
+              context: msg.context,
+              sessionId: sid || null,
+              receivedAt: typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
+              expiresAt: typeof msg.expiresAt === 'string' ? msg.expiresAt : null,
+            };
+            pendingPermissionRequestsRef.current = addPermissionRequest(pendingPermissionRequestsRef.current, incoming);
+            setPendingPermissionRequests((previous) => addPermissionRequest(previous, incoming));
           }
           if (sid) {
             onSessionProcessing?.(sid);
@@ -303,13 +331,24 @@ export function useChatRealtimeHandlers({
         }
 
         case 'permission_cancelled': {
-          if (msg.requestId && sid === activeViewSessionId) {
-            const nextPendingPermissionRequests = pendingPermissionRequestsRef.current.filter(
-              (request: PendingPermissionRequest) => request.requestId !== msg.requestId,
-            );
+          if (typeof msg.requestId === 'string' && sid === activeViewSessionId) {
+            const requestId = msg.requestId;
+            // An expiry stays visible as a settled notice; a cancellation
+            // (run aborted or interrupted) simply ends the request.
+            const settle = (requests: PendingPermissionRequest[]) => (msg.reason === 'timeout'
+              ? expirePermissionRequest(requests, requestId)
+              : removePermissionRequest(requests, requestId));
+            pendingPermissionRequestsRef.current = settle(pendingPermissionRequestsRef.current);
+            setPendingPermissionRequests(settle);
+          }
+          break;
+        }
 
-            pendingPermissionRequestsRef.current = nextPendingPermissionRequests;
-            setPendingPermissionRequests(nextPendingPermissionRequests);
+        case 'permission_resolved': {
+          if (typeof msg.requestId === 'string' && sid === activeViewSessionId) {
+            const requestId = msg.requestId;
+            pendingPermissionRequestsRef.current = removePermissionRequest(pendingPermissionRequestsRef.current, requestId);
+            setPendingPermissionRequests((previous) => removePermissionRequest(previous, requestId));
           }
           break;
         }
@@ -342,6 +381,7 @@ export function useChatRealtimeHandlers({
     setTokenBudget,
     pendingPermissionRequests,
     setPendingPermissionRequests,
+    dismissedPermissionRequestIdsRef,
     streamTimerRef,
     accumulatedStreamRef,
     lastSeqRef,

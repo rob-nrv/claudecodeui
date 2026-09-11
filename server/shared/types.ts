@@ -197,6 +197,7 @@ export type MessageKind =
   | 'status'
   | 'permission_request'
   | 'permission_cancelled'
+  | 'permission_resolved'
   | 'session_created'
   | 'interactive_prompt'
   | 'task_notification';
@@ -214,7 +215,8 @@ export type GatewayEventKind =
   | 'chat_subscribed'
   | 'session_upserted'
   | 'loading_progress'
-  | 'protocol_error';
+  | 'protocol_error'
+  | 'permission_response_ack';
 
 /**
  * Complete set of `kind` values emitted to websocket clients.
@@ -312,9 +314,67 @@ export type ProviderPermissionDecision = {
   rememberEntry?: unknown;
 };
 
+/**
+ * Caller scope for a tool-approval answer. `sessionId` is the app session the
+ * answering client believes the request belongs to; a mismatch is rejected so
+ * one session's answer can never settle another session's request.
+ */
+export type ProviderPermissionScope = {
+  sessionId?: string | null;
+};
+
+/**
+ * Public record of a tool approval still awaiting a user decision, sent in
+ * `permission_request` events and `chat_subscribed.pendingPermissions`.
+ * `expiresAt` is null for interactive tools that wait indefinitely.
+ */
+export type ProviderPendingPermission = {
+  requestId: string;
+  sessionId: string | null;
+  toolName: string;
+  input: unknown;
+  receivedAt: string;
+  expiresAt: string | null;
+};
+
+/** How a tool approval settled: a user answer, expiry, or SDK cancellation. */
+export type ProviderPermissionOutcome = 'answered' | 'expired' | 'cancelled';
+
+/**
+ * A recently settled tool approval, reported in
+ * `chat_subscribed.recentPermissionOutcomes` so a reconnecting client can tell
+ * answered, expired, and cancelled requests apart. `input` is only kept for
+ * expired requests, which the client re-surfaces.
+ */
+export type ProviderPermissionOutcomeRecord = {
+  requestId: string;
+  sessionId: string | null;
+  toolName: string;
+  outcome: ProviderPermissionOutcome;
+  settledAt: string;
+  input?: unknown;
+};
+
+/**
+ * Result of applying a user answer to a tool approval. A rejection says why
+ * the answer no longer applies and is relayed to the answering client as
+ * `permission_response_ack`.
+ */
+export type ProviderPermissionResolution =
+  | { status: 'accepted' }
+  | {
+    status: 'rejected';
+    reason: 'already_answered' | 'expired' | 'cancelled' | 'not_found' | 'session_mismatch';
+  };
+
 export type ProviderRuntimePermissionGateway = {
-  resolve(requestId: string, decision: ProviderPermissionDecision): void;
-  listPending(sessionId: string): unknown[];
+  resolve(
+    requestId: string,
+    decision: ProviderPermissionDecision,
+    scope?: ProviderPermissionScope,
+  ): ProviderPermissionResolution;
+  listPending(sessionId: string): ProviderPendingPermission[];
+  listRecentOutcomes?(sessionId: string): ProviderPermissionOutcomeRecord[];
 };
 
 /**

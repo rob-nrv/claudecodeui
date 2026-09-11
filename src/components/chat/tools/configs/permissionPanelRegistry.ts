@@ -7,6 +7,8 @@ export interface PermissionPanelProps {
     requestIds: string | string[],
     decision: { allow?: boolean; message?: string; updatedInput?: unknown },
   ) => void;
+  /** An answer is on its way; the panel must not accept another. */
+  isSubmitting?: boolean;
 }
 
 const registry: Record<string, ComponentType<PermissionPanelProps>> = {};

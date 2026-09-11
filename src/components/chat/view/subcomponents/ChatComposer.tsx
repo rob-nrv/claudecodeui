@@ -17,6 +17,7 @@ import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
 import type { QueuedDraft } from '../../hooks/useChatComposerState';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
+import { isOpenPermissionRequest } from '../../utils/permissionRequestState';
 import type { ProviderModelOption } from '../../../../types/app';
 import {
   PromptInput,
@@ -61,6 +62,7 @@ interface ChatComposerProps {
     decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
   ) => void;
   handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
+  handlePermissionDismiss: (requestId: string) => void;
   activity: SessionActivity | null;
   isLoading: boolean;
   onAbortSession: () => void;
@@ -125,6 +127,7 @@ export default function ChatComposer({
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
+  handlePermissionDismiss,
   activity,
   isLoading,
   onAbortSession,
@@ -241,11 +244,12 @@ export default function ChatComposer({
 
   // Detect if the AskUserQuestion interactive panel is active
   const hasQuestionPanel = pendingPermissionRequests.some(
-    (r) => r.toolName === 'AskUserQuestion'
+    (r) => r.toolName === 'AskUserQuestion' && isOpenPermissionRequest(r)
   );
 
-  // Hide the thinking/status bar while any permission request is pending
-  const hasPendingPermissions = pendingPermissionRequests.length > 0;
+  // Hide the thinking/status bar while any permission request is still open
+  // (settled notices such as an expiry don't block the run).
+  const hasPendingPermissions = pendingPermissionRequests.some(isOpenPermissionRequest);
   const hasActivityIndicator = Boolean(activity && !hasPendingPermissions);
 
   const hasQueuedDraft = Boolean(queuedDraft);
@@ -279,6 +283,7 @@ export default function ChatComposer({
             pendingPermissionRequests={pendingPermissionRequests}
             handlePermissionDecision={handlePermissionDecision}
             handleGrantToolPermission={handleGrantToolPermission}
+            handlePermissionDismiss={handlePermissionDismiss}
           />
         </div>
       )}

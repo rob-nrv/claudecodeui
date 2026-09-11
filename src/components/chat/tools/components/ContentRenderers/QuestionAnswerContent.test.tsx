@@ -75,3 +75,27 @@ test('still renders a well-formed question + answer', () => {
   );
   assert.ok(html.includes('Pick one?'));
 });
+
+// A question the CLI rejected (InputValidationError) was never shown to the
+// user, so the transcript must not claim they skipped it.
+test('a question rejected by input validation is not labelled as skipped', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(QuestionAnswerContent, {
+      questions: [{ question: 'Pick one?', header: 'Pick', options: [{ label: 'Only' }] }],
+      answers: {},
+      resultError: '<tool_use_error>InputValidationError: [{"code":"too_small","path":["questions",0,"options"]}]',
+    }),
+  );
+  assert.match(markup, /Not shown — Claude sent an invalid question/);
+  assert.doesNotMatch(markup, /Skipped/);
+});
+
+test('an unanswered question without a failure is still labelled as skipped', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(QuestionAnswerContent, {
+      questions: [{ question: 'Pick one?', options: [{ label: 'A' }, { label: 'B' }] }],
+      answers: {},
+    }),
+  );
+  assert.match(markup, /Skipped/);
+});

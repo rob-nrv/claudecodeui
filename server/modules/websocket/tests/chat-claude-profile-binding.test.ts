@@ -47,8 +47,13 @@ function createRecordingRuntime() {
       async abort() {
         return true;
       },
-      resolveToolApproval() {},
+      resolveToolApproval() {
+        return { status: 'rejected' as const, reason: 'not_found' as const };
+      },
       getPendingApprovalsForSession() {
+        return [];
+      },
+      getRecentPermissionOutcomesForSession() {
         return [];
       },
     },

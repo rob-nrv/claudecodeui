@@ -12,7 +12,6 @@
  * - WebSocket message streaming
  */
 
-import crypto from 'crypto';
 import { promises as fs } from 'fs';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -23,6 +22,11 @@ import {
   normalizeImageDescriptors
 } from '@/shared/image-attachments.js';
 import { CLAUDE_PREDEFINED_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
+import {
+  buildExpiredApprovalMessage,
+  claudeToolApprovals,
+  TOOL_APPROVAL_TIMEOUT_MS
+} from '@/modules/providers/list/claude/claude-tool-approvals.provider.js';
 import { claudeConfigJsonPathFor, claudeHomeFor } from '@/modules/claude-profiles/index.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import {
@@ -35,7 +39,6 @@ import {
 import { createCompleteMessage, createNormalizedMessage } from '@/shared/utils.js';
 
 const activeSessions = new Map();
-const pendingToolApprovals = new Map();
 // Sessions cancelled via abort-session. The abort handler already sent the
 // terminal `complete` (aborted: true) to the client, so the run loop must not
 // emit a second one when its generator winds down.
@@ -45,7 +48,6 @@ const abortedSessionIds = new Set();
 // entry, the abort flag, and all client-facing events belong to the new run.
 const supersededInstances = new WeakSet();
 
-const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
 // How long background work is allowed to keep running after a turn ends. This drives
 // two halves of the same behaviour:
@@ -77,75 +79,6 @@ function resolveClaudeEffort(model, effort, modelsDefinition = CLAUDE_PREDEFINED
     : undefined;
 }
 
-function createRequestId() {
-  if (typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return crypto.randomBytes(16).toString('hex');
-}
-
-function waitForToolApproval(requestId, options = {}) {
-  const { timeoutMs = TOOL_APPROVAL_TIMEOUT_MS, signal, onCancel, metadata } = options;
-
-  return new Promise(resolve => {
-    let settled = false;
-
-    const finalize = (decision) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(decision);
-    };
-
-    let timeout;
-
-    const cleanup = () => {
-      pendingToolApprovals.delete(requestId);
-      if (timeout) clearTimeout(timeout);
-      if (signal && abortHandler) {
-        signal.removeEventListener('abort', abortHandler);
-      }
-    };
-
-    // timeoutMs 0 = wait indefinitely (interactive tools)
-    if (timeoutMs > 0) {
-      timeout = setTimeout(() => {
-        onCancel?.('timeout');
-        finalize(null);
-      }, timeoutMs);
-    }
-
-    const abortHandler = () => {
-      onCancel?.('cancelled');
-      finalize({ cancelled: true });
-    };
-
-    if (signal) {
-      if (signal.aborted) {
-        onCancel?.('cancelled');
-        finalize({ cancelled: true });
-        return;
-      }
-      signal.addEventListener('abort', abortHandler, { once: true });
-    }
-
-    const resolver = (decision) => {
-      finalize(decision);
-    };
-    // Attach metadata for getPendingApprovalsForSession lookup
-    if (metadata) {
-      Object.assign(resolver, metadata);
-    }
-    pendingToolApprovals.set(requestId, resolver);
-  });
-}
-
-function resolveToolApproval(requestId, decision) {
-  const resolver = pendingToolApprovals.get(requestId);
-  if (resolver) {
-    resolver(decision);
-  }
-}
 
 // Match stored permission entries against a tool + input combo.
 // This only supports exact tool names and the Bash(command:*) shorthand
@@ -725,8 +658,27 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         }
       }
 
-      const requestId = createRequestId();
-      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      // An abort that landed before this point never reaches the user.
+      if (context?.signal?.aborted) {
+        return { behavior: 'deny', message: 'Permission request cancelled' };
+      }
+
+      // Registered before it is announced, so neither a `chat.subscribe`
+      // snapshot nor an answer can race the `permission_request` event.
+      const approval = claudeToolApprovals.open({
+        // Keyed by the app session id so `chat.subscribe` can look pending
+        // approvals up directly; provider id only for legacy callers.
+        sessionId: sessionId || capturedSessionId || null,
+        toolName,
+        input,
+        timeoutMs: requiresInteraction ? 0 : TOOL_APPROVAL_TIMEOUT_MS,
+        signal: context?.signal,
+        onSettledWithoutAnswer: (outcome, request) => {
+          ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId: request.requestId, reason: outcome === 'expired' ? 'timeout' : 'cancelled', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        }
+      });
+      const { requestId, expiresAt } = approval.request;
+      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, expiresAt, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: sessionId || capturedSessionId || null,
@@ -738,28 +690,21 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         dedupeKey: `claude:permission:${sessionId || capturedSessionId || 'none'}:${requestId}`
       }));
 
-      const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
-        signal: context?.signal,
-        metadata: {
-          // Keyed by the app session id so `chat.subscribe` can look pending
-          // approvals up directly; provider id only for legacy callers.
-          _sessionId: sessionId || capturedSessionId || null,
-          _toolName: toolName,
-          _input: input,
-          _receivedAt: new Date(),
-        },
-        onCancel: (reason) => {
-          ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
-        }
-      });
-      if (!decision) {
-        return { behavior: 'deny', message: 'Permission request timed out' };
+      const settlement = await approval.result;
+      if (settlement.outcome === 'expired') {
+        // Not a denial: the message tells the model so, and tells it not to
+        // retry into another unanswered prompt.
+        return { behavior: 'deny', message: buildExpiredApprovalMessage(TOOL_APPROVAL_TIMEOUT_MS) };
       }
 
-      if (decision.cancelled) {
+      if (settlement.outcome === 'cancelled') {
         return { behavior: 'deny', message: 'Permission request cancelled' };
       }
+
+      const { decision } = settlement;
+      // Sequenced like every run event, so a client replaying after a reload
+      // sees the request settle instead of resurrecting an answered approval.
+      ws.send(createNormalizedMessage({ kind: 'permission_resolved', requestId, allow: Boolean(decision.allow), sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
 
       if (decision.allow) {
         if (decision.rememberEntry && typeof decision.rememberEntry === 'string') {
@@ -1035,27 +980,6 @@ function getActiveClaudeSDKSessions() {
   return getAllSessions();
 }
 
-/**
- * Get pending tool approvals for a specific session.
- * @param {string} sessionId - The session ID
- * @returns {Array} Array of pending permission request objects
- */
-function getPendingApprovalsForSession(sessionId) {
-  const pending = [];
-  for (const [requestId, resolver] of pendingToolApprovals.entries()) {
-    if (resolver._sessionId === sessionId) {
-      pending.push({
-        requestId,
-        toolName: resolver._toolName || 'UnknownTool',
-        input: resolver._input,
-        context: resolver._context,
-        sessionId,
-        receivedAt: resolver._receivedAt || new Date(),
-      });
-    }
-  }
-  return pending;
-}
 
 /**
  * Reconnect a session's WebSocketWriter to a new raw WebSocket.
@@ -1076,8 +1000,9 @@ export const claudeRuntime = {
   run: queryClaudeSDK,
   abort: abortClaudeSDKSession,
   permissions: {
-    resolve: resolveToolApproval,
-    listPending: getPendingApprovalsForSession,
+    resolve: (requestId, decision, scope) => claudeToolApprovals.resolve(requestId, decision, scope),
+    listPending: (sessionId) => claudeToolApprovals.listPending(sessionId),
+    listRecentOutcomes: (sessionId) => claudeToolApprovals.listRecentOutcomes(sessionId),
   },
 };
 
@@ -1087,7 +1012,5 @@ export {
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
-  resolveToolApproval,
-  getPendingApprovalsForSession,
   reconnectSessionWriter
 };

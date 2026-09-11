@@ -5,7 +5,11 @@ import type { IProvider } from '@/shared/interfaces.js';
 import type {
   AnyRecord,
   LLMProvider,
+  ProviderPendingPermission,
   ProviderPermissionDecision,
+  ProviderPermissionOutcomeRecord,
+  ProviderPermissionResolution,
+  ProviderPermissionScope,
   ProviderRunFunction,
   ProviderRuntimeContext,
   ProviderRuntimeWriter,
@@ -91,15 +95,41 @@ export function createProviderRuntimeService(
       return Boolean(await dependencies.resolveProvider(providerName).runtime.abort(sessionId));
     },
 
-    resolveToolApproval(requestId: string, decision: ProviderPermissionDecision): void {
+    /**
+     * Applies a user answer to whichever provider owns the request. The first
+     * acceptance wins; otherwise the most specific rejection (anything other
+     * than `not_found`) is reported back to the answering client.
+     */
+    resolveToolApproval(
+      requestId: string,
+      decision: ProviderPermissionDecision,
+      scope: ProviderPermissionScope = {},
+    ): ProviderPermissionResolution {
+      let resolution: ProviderPermissionResolution = { status: 'rejected', reason: 'not_found' };
       for (const provider of dependencies.listProviders()) {
-        provider.runtime.permissions?.resolve(requestId, decision);
+        const providerResolution = provider.runtime.permissions?.resolve(requestId, decision, scope);
+        if (!providerResolution) {
+          continue;
+        }
+        if (providerResolution.status === 'accepted') {
+          return providerResolution;
+        }
+        if (providerResolution.reason !== 'not_found') {
+          resolution = providerResolution;
+        }
       }
+      return resolution;
     },
 
-    getPendingApprovalsForSession(sessionId: string): unknown[] {
+    getPendingApprovalsForSession(sessionId: string): ProviderPendingPermission[] {
       return dependencies.listProviders().flatMap(
         (provider) => provider.runtime.permissions?.listPending(sessionId) ?? [],
+      );
+    },
+
+    getRecentPermissionOutcomesForSession(sessionId: string): ProviderPermissionOutcomeRecord[] {
+      return dependencies.listProviders().flatMap(
+        (provider) => provider.runtime.permissions?.listRecentOutcomes?.(sessionId) ?? [],
       );
     },
   };

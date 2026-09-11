@@ -14,6 +14,7 @@ import {
   Shimmer,
 } from '../../../../shared/view/ui';
 import { usePermission } from '../../../../contexts/PermissionContext';
+import { isAwaitingPermissionDecision } from '../../utils/permissionRequestState';
 
 import { MarkdownContent } from './ContentRenderers';
 
@@ -40,7 +41,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   const permissionCtx = usePermission();
 
   const pendingRequest = permissionCtx?.pendingPermissionRequests.find(
-    (r) => r.toolName === 'ExitPlanMode' || r.toolName === 'exit_plan_mode'
+    (r) => (r.toolName === 'ExitPlanMode' || r.toolName === 'exit_plan_mode') && isAwaitingPermissionDecision(r)
   );
 
   const handleBuild = () => {

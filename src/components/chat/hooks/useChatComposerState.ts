@@ -6,6 +6,7 @@ import type {
   FormEvent,
   KeyboardEvent,
   MouseEvent,
+  MutableRefObject,
   SetStateAction,
   TouchEvent,
 } from 'react';
@@ -29,6 +30,12 @@ import {
   restoreQueuedMessageOnServer,
   saveQueuedMessageOnServer,
 } from '../utils/queuedMessageApi';
+import {
+  flagPermissionRequestsNotSent,
+  isAwaitingPermissionDecision,
+  markPermissionRequestsSubmitting,
+  removePermissionRequest,
+} from '../utils/permissionRequestState';
 import type {
   ChatAttachment,
   ChatMessage,
@@ -85,7 +92,11 @@ interface UseChatComposerStateArgs {
   scrollToBottom: () => void;
   addMessage: (msg: ChatMessage) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
+  /** Current approvals; answers are only sent for requests still awaiting a decision. */
+  pendingPermissionRequests: PendingPermissionRequest[];
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  /** Expired approvals dismissed in this tab (owned by useChatProviderState). */
+  dismissedPermissionRequestIdsRef: MutableRefObject<Set<string>>;
 }
 
 interface MentionableFile {
@@ -269,7 +280,9 @@ export function useChatComposerState({
   scrollToBottom,
   addMessage,
   setIsUserScrolledUp,
+  pendingPermissionRequests,
   setPendingPermissionRequests,
+  dismissedPermissionRequestIdsRef,
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
@@ -1361,33 +1374,56 @@ export function useChatComposerState({
     [provider],
   );
 
+  // Mirrors the latest approvals, and is advanced synchronously when an answer
+  // goes out, so a double tap inside one render cannot send it twice.
+  const permissionRequestsRef = useRef(pendingPermissionRequests);
+  permissionRequestsRef.current = pendingPermissionRequests;
+
   const handlePermissionDecision = useCallback(
     (
       requestIds: string | string[],
       decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
     ) => {
       const ids = Array.isArray(requestIds) ? requestIds : [requestIds];
-      const validIds = ids.filter(Boolean);
-      if (validIds.length === 0) {
+      const targets = permissionRequestsRef.current.filter(
+        (request) => ids.includes(request.requestId) && isAwaitingPermissionDecision(request),
+      );
+      if (targets.length === 0) {
         return;
       }
 
-      validIds.forEach((requestId) => {
-        sendMessage({
+      const sentIds: string[] = [];
+      const unsentIds: string[] = [];
+      targets.forEach((request) => {
+        const sent = sendMessage({
           type: 'chat.permission-response',
-          requestId,
+          requestId: request.requestId,
+          // Lets the backend reject an answer aimed at another session's request.
+          sessionId: request.sessionId ?? selectedSession?.id ?? currentSessionId ?? null,
           allow: Boolean(decision?.allow),
           updatedInput: decision?.updatedInput,
           message: decision?.message,
           rememberEntry: decision?.rememberEntry,
         });
+        (sent ? sentIds : unsentIds).push(request.requestId);
       });
 
+      // A request only leaves the list once the server confirms it (ack or
+      // `permission_resolved`); an answer that never left stays answerable.
+      permissionRequestsRef.current = markPermissionRequestsSubmitting(permissionRequestsRef.current, sentIds);
       setPendingPermissionRequests((previous) =>
-        previous.filter((request) => !validIds.includes(request.requestId)),
+        flagPermissionRequestsNotSent(markPermissionRequestsSubmitting(previous, sentIds), unsentIds),
       );
     },
-    [sendMessage, setPendingPermissionRequests],
+    [currentSessionId, selectedSession?.id, sendMessage, setPendingPermissionRequests],
+  );
+
+  const handlePermissionDismiss = useCallback(
+    (requestId: string) => {
+      dismissedPermissionRequestIdsRef.current.add(requestId);
+      setPendingPermissionRequests((previous) => removePermissionRequest(previous, requestId));
+    },
+    [dismissedPermissionRequestIdsRef, setPendingPermissionRequests],
   );
 
   const [isInputFocused, setIsInputFocused] = useState(false);
@@ -1442,6 +1478,7 @@ export function useChatComposerState({
     handleClearInput,
     handleAbortSession,
     handlePermissionDecision,
+    handlePermissionDismiss,
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,

@@ -4,6 +4,8 @@ import type { Question } from '../../../types/types';
 interface QuestionAnswerContentProps {
   questions: Question[];
   answers: Record<string, string>;
+  /** Tool result error text, when the question failed instead of being answered. */
+  resultError?: string;
   className?: string;
 }
 
@@ -11,6 +13,7 @@ interface QuestionAnswerContentProps {
 export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
   questions,
   answers,
+  resultError,
   className = '',
 }) => {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
@@ -25,6 +28,14 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
 
   const hasAnyAnswer = Object.keys(answers || {}).length > 0;
   const total = questions.length;
+  // A failed question was never answered by the user, so it must not read as
+  // "Skipped". InputValidationError means the CLI rejected it before it could
+  // be shown at all.
+  const failureLabel = resultError === undefined
+    ? null
+    : resultError.includes('InputValidationError')
+      ? 'Not shown — Claude sent an invalid question'
+      : 'No answer recorded';
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -193,7 +204,13 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
         );
       })}
 
-      {!hasAnyAnswer && total === 1 && (
+      {!hasAnyAnswer && failureLabel && (
+        <div className="text-[11px] italic text-gray-400 dark:text-gray-500">
+          {failureLabel}
+        </div>
+      )}
+
+      {!hasAnyAnswer && !failureLabel && total === 1 && (
         <div className="text-[11px] italic text-gray-400 dark:text-gray-500">
           Skipped
         </div>

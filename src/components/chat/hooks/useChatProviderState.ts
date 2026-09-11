@@ -118,6 +118,9 @@ const getSessionSelectionKey = (provider: LLMProvider, sessionId: string): strin
 export function useChatProviderState({ selectedSession, selectedProject: _selectedProject }: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
+  // Expired approvals the user dismissed in this tab, so a reconnect snapshot
+  // does not surface them again.
+  const dismissedPermissionRequestIdsRef = useRef<Set<string>>(new Set());
   const [provider, setProvider] = useState<LLMProvider>(readStoredProvider);
   const [cursorModel, setCursorModel] = useState<string>(() => {
     return localStorage.getItem('cursor-model') || FALLBACK_DEFAULT_MODEL.cursor;
@@ -871,6 +874,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     setPermissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
+    dismissedPermissionRequestIdsRef,
     availablePermissionModes,
     selectPermissionMode,
     cyclePermissionMode,

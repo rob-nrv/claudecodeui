@@ -5,6 +5,7 @@ import type { Question } from '../../../types/types';
 export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   request,
   onDecision,
+  isSubmitting = false,
 }) => {
   const input = request.input as { questions?: Question[] } | undefined;
   const questions: Question[] = input?.questions || [];
@@ -81,12 +82,14 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   }, [questions, selections, otherActive, otherTexts]);
 
   const handleSubmit = useCallback(() => {
+    if (isSubmitting) return;
     onDecision(request.requestId, { allow: true, updatedInput: { ...input, answers: buildAnswers() } });
-  }, [onDecision, request.requestId, input, buildAnswers]);
+  }, [isSubmitting, onDecision, request.requestId, input, buildAnswers]);
 
   const handleSkip = useCallback(() => {
+    if (isSubmitting) return;
     onDecision(request.requestId, { allow: true, updatedInput: { ...input, answers: {} } });
-  }, [onDecision, request.requestId, input]);
+  }, [isSubmitting, onDecision, request.requestId, input]);
 
   // Keyboard handler for number keys and navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -336,7 +339,8 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
           <button
             type="button"
             onClick={handleSkip}
-            className="text-[11px] text-gray-400 transition-colors hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+            disabled={isSubmitting}
+            className="text-[11px] text-gray-400 transition-colors hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:text-gray-300"
           >
             {isSingle ? 'Skip' : 'Skip all'}
             <span className="ml-1 text-[9px] text-gray-300 dark:text-gray-600">Esc</span>
@@ -360,11 +364,11 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
               <button
                 type="button"
                 onClick={handleSubmit}
-                disabled={!hasCurrentSelection && !Object.keys(buildAnswers()).length}
+                disabled={isSubmitting || (!hasCurrentSelection && !Object.keys(buildAnswers()).length)}
                 className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-30 disabled:shadow-none dark:from-blue-500 dark:to-blue-600"
               >
-                Submit
-                <span className="ml-0.5 font-mono text-[9px] opacity-70">Enter</span>
+                {isSubmitting ? 'Sending…' : 'Submit'}
+                {!isSubmitting && <span className="ml-0.5 font-mono text-[9px] opacity-70">Enter</span>}
               </button>
             ) : (
               <button

@@ -91,13 +91,26 @@ export interface PermissionGrantResult {
   updatedSettings?: ClaudeSettings;
 }
 
+/**
+ * Client lifecycle of a tool approval. `pending` can be answered; `submitting`
+ * has an answer on its way; `expired` and `unavailable` are settled notices
+ * that stay visible, never answerable, until dismissed.
+ */
+export type PermissionRequestStatus = 'pending' | 'submitting' | 'expired' | 'unavailable';
+
 export interface PendingPermissionRequest {
   requestId: string;
   toolName: string;
   input?: unknown;
   context?: unknown;
   sessionId?: string | null;
-  receivedAt?: Date;
+  receivedAt?: string;
+  /** When the backend stops waiting; null for interactive tools that never expire. */
+  expiresAt?: string | null;
+  /** Absent means `pending`. */
+  status?: PermissionRequestStatus;
+  /** The last answer could not be sent (socket closed); still answerable. */
+  notice?: 'not_sent';
 }
 
 export interface QuestionOption {

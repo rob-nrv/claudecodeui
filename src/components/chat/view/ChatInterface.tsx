@@ -6,6 +6,7 @@ import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import PermissionContext from '../../../contexts/PermissionContext';
 import type { ChatInterfaceProps, PermissionMode, Provider  } from '../types/types';
+import { isOpenPermissionRequest } from '../utils/permissionRequestState';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
@@ -79,6 +80,7 @@ function ChatInterface({
     permissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
+    dismissedPermissionRequestIdsRef,
     availablePermissionModes,
     selectPermissionMode,
     cyclePermissionMode,
@@ -223,6 +225,7 @@ function ChatInterface({
     handleClearInput,
     handleAbortSession,
     handlePermissionDecision,
+    handlePermissionDismiss,
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,
@@ -253,7 +256,9 @@ function ChatInterface({
     scrollToBottom,
     addMessage,
     setIsUserScrolledUp,
+    pendingPermissionRequests,
     setPendingPermissionRequests,
+    dismissedPermissionRequestIdsRef,
     resolvePermissionModeForProvider,
   });
 
@@ -283,6 +288,7 @@ function ChatInterface({
     setTokenBudget,
     pendingPermissionRequests,
     setPendingPermissionRequests,
+    dismissedPermissionRequestIdsRef,
     streamTimerRef,
     accumulatedStreamRef,
     lastSeqRef,
@@ -346,7 +352,7 @@ function ChatInterface({
   // Mirrors ChatComposer's own visibility check so the message pane can
   // reserve enough bottom space to keep the floating status tab from
   // overlapping the last message.
-  const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
+  const hasActivityIndicator = Boolean(sessionActivity && !pendingPermissionRequests.some(isOpenPermissionRequest));
 
   const selectedProviderLabel =
     provider === 'cursor'
@@ -446,6 +452,7 @@ function ChatInterface({
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
+          handlePermissionDismiss={handlePermissionDismiss}
           activity={sessionActivity}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}

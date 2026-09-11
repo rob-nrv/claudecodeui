@@ -50,14 +50,23 @@ function getToolCategory(toolName: string): string {
 const CLAUDE_DENIAL_MESSAGES = [
   'user denied tool use',
   'tool disallowed by settings',
-  'permission request timed out',
   'permission request cancelled',
+];
+
+// Nobody answered the approval — not a denial. "timed out" is the wording
+// older transcripts still carry.
+const CLAUDE_EXPIRY_MESSAGES = [
+  'permission request expired',
+  'permission request timed out',
 ];
 
 function deriveToolStatus(toolResult: any): ToolStatus {
   if (!toolResult) return 'running';
   if (toolResult.isError) {
     const content = String(toolResult.content || '').toLowerCase().trim();
+    if (CLAUDE_EXPIRY_MESSAGES.some((msg) => content.includes(msg))) {
+      return 'expired';
+    }
     if (CLAUDE_DENIAL_MESSAGES.some((msg) => content.includes(msg))) {
       return 'denied';
     }
@@ -271,6 +280,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
           <QuestionAnswerContent
             questions={contentProps.questions || []}
             answers={contentProps.answers || {}}
+            resultError={toolResult?.isError ? String(toolResult.content ?? '') : undefined}
           />
         );
         break;

@@ -250,6 +250,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       case 'status':
       case 'permission_request':
       case 'permission_cancelled':
+      case 'permission_resolved':
       case 'session_created':
         // Skip — these are handled by useChatRealtimeHandlers
         break;

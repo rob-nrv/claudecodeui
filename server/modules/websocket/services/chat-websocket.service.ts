@@ -17,6 +17,8 @@ import type {
   AuthenticatedWebSocketRequest,
   LLMProvider,
   ProviderPermissionDecision,
+  ProviderPermissionResolution,
+  ProviderPermissionScope,
   ProviderRuntimeWriter,
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
@@ -73,8 +75,13 @@ type ProviderRuntimeGateway = {
     writer: ProviderRuntimeWriter,
   ): Promise<unknown>;
   abort(provider: LLMProvider, sessionId: string): Promise<boolean>;
-  resolveToolApproval(requestId: string, payload: ProviderPermissionDecision): void;
+  resolveToolApproval(
+    requestId: string,
+    payload: ProviderPermissionDecision,
+    scope?: ProviderPermissionScope,
+  ): ProviderPermissionResolution;
   getPendingApprovalsForSession(sessionId: string): unknown[];
+  getRecentPermissionOutcomesForSession(sessionId: string): unknown[];
 };
 
 type ChatWebSocketDependencies = {
@@ -342,6 +349,9 @@ function handleChatSubscribe(
     // Pending approvals are tracked under the app session id inside the
     // Claude runtime, so they can be looked up directly.
     const pendingPermissions = dependencies.runtime.getPendingApprovalsForSession(sessionId);
+    // Recently settled approvals let a reconnecting client tell answered,
+    // expired, and cancelled requests apart instead of guessing from absence.
+    const recentPermissionOutcomes = dependencies.runtime.getRecentPermissionOutcomesForSession(sessionId);
 
     sendJson(ws, {
       kind: 'chat_subscribed',
@@ -349,6 +359,7 @@ function handleChatSubscribe(
       isProcessing,
       lastSeq: run?.lastSeq ?? 0,
       pendingPermissions,
+      recentPermissionOutcomes,
       timestamp: new Date().toISOString(),
     });
 
@@ -368,17 +379,40 @@ function handleChatSubscribe(
  * Handles `chat.permission-response`: forwards a tool-approval decision to the
  * pending approval resolver (Claude is the only provider with interactive
  * approvals today, but the message is intentionally provider-neutral).
+ *
+ * Always acknowledges to the answering socket — that socket is not
+ * necessarily the one the run streams to — so the client can leave its
+ * "sending" state: accepted, or rejected with why (already answered, expired,
+ * cancelled, unknown, or belonging to another session).
  */
-function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDependencies): void {
+function handlePermissionResponse(
+  ws: WebSocket,
+  data: AnyRecord,
+  dependencies: ChatWebSocketDependencies
+): void {
   if (typeof data.requestId !== 'string' || data.requestId.length === 0) {
     return;
   }
 
-  dependencies.runtime.resolveToolApproval(data.requestId, {
-    allow: Boolean(data.allow),
-    updatedInput: data.updatedInput,
-    message: typeof data.message === 'string' ? data.message : undefined,
-    rememberEntry: data.rememberEntry,
+  const sessionId = readRequiredSessionId(data);
+  const resolution = dependencies.runtime.resolveToolApproval(
+    data.requestId,
+    {
+      allow: Boolean(data.allow),
+      updatedInput: data.updatedInput,
+      message: typeof data.message === 'string' ? data.message : undefined,
+      rememberEntry: data.rememberEntry,
+    },
+    { sessionId },
+  );
+
+  sendJson(ws, {
+    kind: 'permission_response_ack',
+    requestId: data.requestId,
+    sessionId,
+    accepted: resolution.status === 'accepted',
+    reason: resolution.status === 'rejected' ? resolution.reason : null,
+    timestamp: new Date().toISOString(),
   });
 }
 
@@ -389,12 +423,12 @@ function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDe
  * - `chat.send`                { sessionId, content, options? }
  * - `chat.abort`               { sessionId }
  * - `chat.subscribe`           { sessions: [{ sessionId, lastSeq? }] }
- * - `chat.permission-response` { requestId, allow, updatedInput?, message?, rememberEntry? }
+ * - `chat.permission-response` { requestId, sessionId, allow, updatedInput?, message?, rememberEntry? }
  *
  * Outbound protocol (server to client): every frame is `kind`-based — either
  * a provider `NormalizedMessage` (with `seq`) or a gateway event
  * (`chat_subscribed`, `session_upserted`, `loading_progress`,
- * `protocol_error`).
+ * `protocol_error`, `permission_response_ack`).
  */
 export function handleChatConnection(
   ws: WebSocket,
@@ -427,7 +461,7 @@ export function handleChatConnection(
           handleChatSubscribe(ws, data, dependencies);
           return;
         case 'chat.permission-response':
-          handlePermissionResponse(data, dependencies);
+          handlePermissionResponse(ws, data, dependencies);
           return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);

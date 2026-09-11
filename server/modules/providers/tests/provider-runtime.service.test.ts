@@ -115,11 +115,12 @@ test('routes permission decisions through provider-owned runtime capabilities', 
   const decisions: unknown[][] = [];
   const claudeRuntime = createRuntime({
     permissions: {
-      resolve(requestId, decision) {
-        decisions.push([requestId, decision]);
+      resolve(requestId, decision, scope) {
+        decisions.push([requestId, decision, scope]);
+        return { status: 'accepted' };
       },
       listPending(sessionId) {
-        return [{ requestId: 'request-1', sessionId }];
+        return [{ requestId: 'request-1', sessionId, toolName: 'Bash', input: {}, receivedAt: 'now', expiresAt: null }];
       },
     },
   });
@@ -129,10 +130,38 @@ test('routes permission decisions through provider-owned runtime capabilities', 
   ]);
   const decision = { allow: true, message: 'approved' };
 
-  service.resolveToolApproval('request-1', decision);
+  assert.deepEqual(
+    service.resolveToolApproval('request-1', decision, { sessionId: 'session-1' }),
+    { status: 'accepted' },
+  );
 
-  assert.deepEqual(decisions, [['request-1', decision]]);
+  assert.deepEqual(decisions, [['request-1', decision, { sessionId: 'session-1' }]]);
   assert.deepEqual(service.getPendingApprovalsForSession('session-1'), [
-    { requestId: 'request-1', sessionId: 'session-1' },
+    { requestId: 'request-1', sessionId: 'session-1', toolName: 'Bash', input: {}, receivedAt: 'now', expiresAt: null },
   ]);
+});
+
+test('reports the most specific rejection when no provider accepts a permission answer', () => {
+  const claudeRuntime = createRuntime({
+    permissions: {
+      resolve: () => ({ status: 'rejected', reason: 'expired' }),
+      listPending: () => [],
+    },
+  });
+  const cursorRuntime = createRuntime({
+    permissions: {
+      resolve: () => ({ status: 'rejected', reason: 'not_found' }),
+      listPending: () => [],
+    },
+  });
+
+  assert.deepEqual(
+    createService([createProvider('claude', claudeRuntime), createProvider('cursor', cursorRuntime)])
+      .resolveToolApproval('request-1', { allow: true }),
+    { status: 'rejected', reason: 'expired' },
+  );
+  assert.deepEqual(
+    createService([createProvider('cursor', createRuntime())]).resolveToolApproval('request-1', { allow: true }),
+    { status: 'rejected', reason: 'not_found' },
+  );
 });

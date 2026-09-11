@@ -695,6 +695,8 @@ export function useProjectsState({
         && event.kind !== 'status'
         && event.kind !== 'stream_end'
         && event.kind !== 'permission_cancelled'
+        && event.kind !== 'permission_resolved'
+        && event.kind !== 'permission_response_ack'
         && event.kind !== 'websocket_reconnected'
       ) {
         markSessionAttention(eventSessionId);
