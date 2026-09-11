@@ -23,8 +23,8 @@ import {
   type StoredQueuedMessage,
 } from '../utils/chatStorage';
 import {
-  claimQueuedMessageOnServer,
   clearQueuedMessageOnServer,
+  fetchAndClaimQueuedMessage,
   fetchQueuedMessage,
   restoreQueuedMessageOnServer,
   saveQueuedMessageOnServer,
@@ -737,6 +737,7 @@ export function useChatComposerState({
           uploadedAttachments,
           options: queuedOptions,
         };
+        let queuedMessageSaved: Promise<void> | null = null;
         if (queuedSessionKey) {
           // Write the claim ticket synchronously after upload; this closes the
           // gap before React's persistence effect runs.
@@ -748,8 +749,9 @@ export function useChatComposerState({
           writeQueuedMessage(queuedSessionKey, storedMessage);
           // Best-effort: the server row is the authoritative queue (survives
           // a closed tab or cleared storage); localStorage above is only the
-          // same-tab optimistic mirror.
-          saveQueuedMessageOnServer(queuedSessionKey, storedMessage).catch((error) => {
+          // same-tab optimistic mirror. Kept so the branch below can wait for
+          // it before trying to claim what it just wrote.
+          queuedMessageSaved = saveQueuedMessageOnServer(queuedSessionKey, storedMessage).catch((error) => {
             console.error('Failed to persist queued message on the server:', error);
           });
         }
@@ -762,17 +764,40 @@ export function useChatComposerState({
             processingSessionsRef.current
             && !processingSessionsRef.current.has(queuedSessionKey)
           ) {
-            clearQueuedMessage(queuedSessionKey);
-            sendMessage({
-              type: 'chat.send',
-              sessionId: queuedSessionKey,
-              content: durableDraft.content,
-              options: {
-                ...(durableDraft.options ?? {}),
-                attachments: durableDraft.uploadedAttachments ?? [],
-              },
+            // Same authoritative claim protocol as the other flush paths:
+            // wait for our own save to land, then only a successful claim may
+            // dispatch. This is what prevents a double-send against the
+            // app-level auto-send — which also watches this now-backgrounded
+            // session — or another tab/device.
+            await queuedMessageSaved;
+            const claimed = await fetchAndClaimQueuedMessage(queuedSessionKey).catch((error) => {
+              console.error('Failed to claim queued message for dispatch:', error);
+              return null;
             });
-            onSessionProcessing?.(queuedSessionKey, { statusText: null, canInterrupt: true });
+            if (claimed) {
+              clearQueuedMessage(queuedSessionKey);
+              const claimedMessage = claimed.message;
+              const delivered = sendMessage({
+                type: 'chat.send',
+                sessionId: queuedSessionKey,
+                content: claimedMessage.content,
+                options: {
+                  ...(claimedMessage.options ?? {}),
+                  attachments: claimedMessage.attachments ?? [],
+                },
+              });
+              onSessionProcessing?.(queuedSessionKey, { statusText: null, canInterrupt: true });
+              if (!delivered) {
+                // The socket wasn't open when we tried to send: put the
+                // claimed message back instead of losing it silently.
+                restoreQueuedMessageOnServer(queuedSessionKey, claimed.claimToken).catch((error) => {
+                  console.error('Failed to restore an undelivered queued message:', error);
+                });
+              }
+            }
+            // If `claimed` is null, either nothing was queued or another
+            // path/tab/device already claimed it first — don't send a
+            // duplicate.
           }
           return;
         }
@@ -1023,35 +1048,21 @@ export function useChatComposerState({
         return;
       }
       // The server row is the claim ticket shared with the app-level
-      // auto-send (which handles sessions that finish while not viewed) and
-      // with any other open tab/device. Only a successful claim may dispatch
-      // — this is what makes double-send impossible even across tabs, not
-      // just within this composer.
-      fetchQueuedMessage(sessionKey)
-        .then((fetched) => {
-          const claimToken = fetched.claimToken;
-          if (!claimToken) {
-            // Already claimed elsewhere (or never made it to the server).
-            setQueuedDraft(null);
-            return null;
-          }
-          return claimQueuedMessageOnServer(sessionKey, claimToken).then((claimResult) => ({
-            claimToken,
-            claimResult,
-          }));
-        })
+      // auto-send (which handles sessions that finish while not viewed), the
+      // mid-upload session-switch send below, and any other open tab/device.
+      // Only a successful claim may dispatch — this is what makes
+      // double-send impossible across all of them, not just within this
+      // composer.
+      fetchAndClaimQueuedMessage(sessionKey)
         .then((claimed) => {
           if (!claimed) {
-            return;
-          }
-          const { claimToken, claimResult } = claimed;
-          if (!claimResult.claimed || !claimResult.message) {
-            // Another tab/path claimed it first — don't send a duplicate.
+            // Nothing queued, or another path/tab/device claimed it first —
+            // don't send a duplicate.
             setQueuedDraft(null);
             return;
           }
           clearQueuedMessage(sessionKey);
-          const claimedMessage = claimResult.message;
+          const claimedMessage = claimed.message;
           const dispatchDraft: QueuedDraft = {
             content: claimedMessage.content,
             attachments: [],
@@ -1066,7 +1077,7 @@ export function useChatComposerState({
             if (delivered === false) {
               // The socket wasn't open when we tried to send: put the claimed
               // message back instead of losing it silently.
-              restoreQueuedMessageOnServer(sessionKey, claimToken).catch((error) => {
+              restoreQueuedMessageOnServer(sessionKey, claimed.claimToken).catch((error) => {
                 console.error('Failed to restore an undelivered queued message:', error);
               });
             }

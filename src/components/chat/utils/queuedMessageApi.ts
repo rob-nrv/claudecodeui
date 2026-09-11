@@ -80,3 +80,26 @@ export async function restoreQueuedMessageOnServer(sessionId: string, claimToken
   });
   await parseSuccessResponse<unknown>(response, 'restore queued message');
 }
+
+/**
+ * Fetches the current queue row and atomically claims it in one round trip.
+ * Every dispatch path (the composer's own flush, the background auto-send,
+ * or the mid-upload session-switch send) must go through this before
+ * calling `sendMessage`, and only act on a non-null result — this is the
+ * single choke point that makes concurrent dispatch attempts (another tab,
+ * another device, or one of this app's other flush paths) resolve to at
+ * most one send.
+ */
+export async function fetchAndClaimQueuedMessage(
+  sessionId: string,
+): Promise<{ claimToken: string; message: StoredQueuedMessage } | null> {
+  const { claimToken } = await fetchQueuedMessage(sessionId);
+  if (!claimToken) {
+    return null;
+  }
+  const claimResult = await claimQueuedMessageOnServer(sessionId, claimToken);
+  if (!claimResult.claimed || !claimResult.message) {
+    return null;
+  }
+  return { claimToken, message: claimResult.message };
+}

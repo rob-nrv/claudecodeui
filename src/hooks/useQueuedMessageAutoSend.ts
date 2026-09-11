@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { clearQueuedMessage, readQueuedMessage } from '../components/chat/utils/chatStorage';
-import { claimQueuedMessageOnServer, fetchQueuedMessage } from '../components/chat/utils/queuedMessageApi';
+import { fetchAndClaimQueuedMessage, restoreQueuedMessageOnServer } from '../components/chat/utils/queuedMessageApi';
 
 import type { MarkSessionProcessing, SessionActivityMap } from './useSessionProtection';
 
@@ -62,33 +62,31 @@ export function useQueuedMessageAutoSend({
       }
 
       // The server row is the claim ticket shared with the composer's own
-      // flush (and any other open tab/device). Only a successful claim may
-      // dispatch, so the two paths can never both send this session's draft.
-      fetchQueuedMessage(sessionId)
-        .then((fetched) => {
-          if (!fetched.claimToken) {
-            clearQueuedMessage(sessionId);
-            return null;
-          }
-          return claimQueuedMessageOnServer(sessionId, fetched.claimToken);
-        })
-        .then((claimResult) => {
-          if (!claimResult) {
-            return;
-          }
-          if (!claimResult.claimed || !claimResult.message) {
+      // flush and the mid-upload session-switch send. Only a successful claim
+      // may dispatch, so none of them can ever both send this session's draft.
+      fetchAndClaimQueuedMessage(sessionId)
+        .then((claimed) => {
+          if (!claimed) {
+            // Nothing queued, or another path/tab/device claimed it first.
             clearQueuedMessage(sessionId);
             return;
           }
           clearQueuedMessage(sessionId);
-          const claimedMessage = claimResult.message;
-          sendMessage({
+          const claimedMessage = claimed.message;
+          const delivered = sendMessage({
             type: 'chat.send',
             sessionId,
             content: claimedMessage.content,
             options: { ...(claimedMessage.options ?? {}), attachments: claimedMessage.attachments ?? [] },
           });
           markSessionProcessing(sessionId, { statusText: null, canInterrupt: true });
+          if (!delivered) {
+            // The socket closed in the gap between the check above and this
+            // send: put the claimed message back instead of losing it.
+            restoreQueuedMessageOnServer(sessionId, claimed.claimToken).catch((error) => {
+              console.error('Failed to restore an undelivered queued message:', error);
+            });
+          }
         })
         .catch((error) => {
           console.error('Failed to claim queued message for dispatch:', error);
