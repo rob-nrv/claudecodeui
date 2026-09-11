@@ -39,6 +39,8 @@ type OpenToolApprovalOptions = {
   sessionId: string | null;
   toolName: string;
   input: unknown;
+  /** The SDK's tool_use id, when the caller has one. See `ProviderPendingPermission.toolId`. */
+  toolId?: string;
   /** 0 waits indefinitely (interactive tools such as AskUserQuestion). */
   timeoutMs: number;
   /** The SDK's per-tool abort signal (run aborted or turn interrupted). */
@@ -132,6 +134,7 @@ export function createToolApprovalRegistry(options: { now?: () => number } = {})
         expiresAt: openOptions.timeoutMs > 0
           ? new Date(receivedAtMs + openOptions.timeoutMs).toISOString()
           : null,
+        ...(openOptions.toolId ? { toolId: openOptions.toolId } : {}),
       };
 
       let resolveResult!: (result: ToolApprovalWaitResult) => void;

@@ -350,6 +350,13 @@ export function useChatRealtimeHandlers({
             pendingPermissionRequestsRef.current = removePermissionRequest(pendingPermissionRequestsRef.current, requestId);
             setPendingPermissionRequests((previous) => removePermissionRequest(previous, requestId));
           }
+          // The CLI never rewrites a tool_use's own `input` once its approval
+          // resolves — it only narrates the answer as prose in the
+          // tool_result — so this is the only place the real answer (e.g. an
+          // AskUserQuestion selection) ever reaches the transcript row.
+          if (sid && typeof msg.toolId === 'string' && msg.toolId) {
+            sessionStore.patchToolUseInput(sid, msg.toolId, msg.toolInput);
+          }
           break;
         }
 

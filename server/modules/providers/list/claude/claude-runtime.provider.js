@@ -663,6 +663,13 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         return { behavior: 'deny', message: 'Permission request cancelled' };
       }
 
+      // The SDK's own id for this tool_use, when it supplies one. Lets a
+      // client patch the exact transcript row once this settles — the CLI
+      // never rewrites that row's `input` itself (it only narrates the
+      // answer as prose in the tool_result), so without this id an answered
+      // AskUserQuestion has no way to stop reading as "Skipped".
+      const toolUseId = context?.toolUseID;
+
       // Registered before it is announced, so neither a `chat.subscribe`
       // snapshot nor an answer can race the `permission_request` event.
       const approval = claudeToolApprovals.open({
@@ -671,6 +678,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         sessionId: sessionId || capturedSessionId || null,
         toolName,
         input,
+        toolId: toolUseId,
         timeoutMs: requiresInteraction ? 0 : TOOL_APPROVAL_TIMEOUT_MS,
         signal: context?.signal,
         onSettledWithoutAnswer: (outcome, request) => {
@@ -678,7 +686,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         }
       });
       const { requestId, expiresAt } = approval.request;
-      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, expiresAt, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, expiresAt, toolId: toolUseId, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: sessionId || capturedSessionId || null,
@@ -702,9 +710,14 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       }
 
       const { decision } = settlement;
+      // The same value this callback is about to hand back to the SDK as
+      // `updatedInput` — carried here too so the client can patch the
+      // matching tool_use row (by `toolUseId`) with the real answer instead
+      // of leaving it to read as unanswered.
+      const resolvedInput = decision.updatedInput ?? input;
       // Sequenced like every run event, so a client replaying after a reload
       // sees the request settle instead of resurrecting an answered approval.
-      ws.send(createNormalizedMessage({ kind: 'permission_resolved', requestId, allow: Boolean(decision.allow), sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      ws.send(createNormalizedMessage({ kind: 'permission_resolved', requestId, allow: Boolean(decision.allow), toolId: toolUseId, toolInput: resolvedInput, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
 
       if (decision.allow) {
         if (decision.rememberEntry && typeof decision.rememberEntry === 'string') {
@@ -715,7 +728,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
             sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
           }
         }
-        return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
+        return { behavior: 'allow', updatedInput: resolvedInput };
       }
 
       return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };

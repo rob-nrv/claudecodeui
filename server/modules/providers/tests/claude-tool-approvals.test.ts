@@ -116,6 +116,34 @@ test('interactive approvals (timeoutMs 0) never expire', async () => {
   assert.deepEqual(await result, { outcome: 'answered', decision: { allow: true, updatedInput: { answers } } });
 });
 
+test('HC-02: an AskUserQuestion approval carries the SDK tool_use id through to the pending request', async () => {
+  const registry = createToolApprovalRegistry();
+  const { request } = registry.open({
+    sessionId: 'session-1',
+    toolName: 'AskUserQuestion',
+    input: { questions: [] },
+    toolId: 'toolu_017LjwFgSawE4s45D3ZSRYb5',
+    timeoutMs: 0,
+  });
+
+  assert.equal(request.toolId, 'toolu_017LjwFgSawE4s45D3ZSRYb5');
+  assert.equal(registry.listPending('session-1')[0]?.toolId, 'toolu_017LjwFgSawE4s45D3ZSRYb5');
+
+  // The CLI's own transcript never carries the answer on the tool_use's
+  // input (verified against a real transcript: it stays exactly what the
+  // model sent), so this id is the only way the app can later patch the
+  // right row with the real answer instead of leaving it to read as
+  // "Skipped". A caller that never supplies one (every non-interactive tool
+  // today) must not see a stray field appear.
+  const { request: withoutToolId } = registry.open({
+    sessionId: 'session-1',
+    toolName: 'Bash',
+    input: bashInput,
+    timeoutMs: 60_000,
+  });
+  assert.equal('toolId' in withoutToolId, false);
+});
+
 test('unknown request ids are rejected as not_found', () => {
   const registry = createToolApprovalRegistry();
   assert.deepEqual(registry.resolve('missing', { allow: true }), { status: 'rejected', reason: 'not_found' });

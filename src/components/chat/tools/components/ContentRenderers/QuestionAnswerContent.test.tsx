@@ -76,6 +76,25 @@ test('still renders a well-formed question + answer', () => {
   assert.ok(html.includes('Pick one?'));
 });
 
+// HC-02: AskUserQuestion displayed -> answered for real -> the transcript
+// must never read "Skipped". This component's own logic was already
+// correct (it derives `skipped` from `!answer`); the bug was upstream —
+// `answers` never reached this prop for a genuinely answered question
+// because the CLI never rewrites the tool_use's own input (fixed in
+// useSessionStore's `applyToolUseInputPatch` + the `permission_resolved`
+// `toolId`/`toolInput` wiring). This test pins the contract this component
+// must keep honouring once that data actually arrives.
+test('a question that was really answered never renders as Skipped', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(QuestionAnswerContent, {
+      questions: [{ question: 'Quelle option choisis-tu ?', header: 'Choix', options: [{ label: 'Option A' }, { label: 'Option B' }] }],
+      answers: { 'Quelle option choisis-tu ?': 'Option A' },
+    }),
+  );
+  assert.match(markup, /Option A/);
+  assert.doesNotMatch(markup, /Skipped/);
+});
+
 // A question the CLI rejected (InputValidationError) was never shown to the
 // user, so the transcript must not claim they skipped it.
 test('a question rejected by input validation is not labelled as skipped', () => {

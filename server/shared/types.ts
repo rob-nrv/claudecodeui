@@ -335,6 +335,13 @@ export type ProviderPendingPermission = {
   input: unknown;
   receivedAt: string;
   expiresAt: string | null;
+  /**
+   * The SDK's own tool_use id for this request (Claude: `context.toolUseID`),
+   * when the provider can supply one. Lets a client patch the exact transcript
+   * row the approval belongs to once it settles, instead of relying on the
+   * provider to ever rewrite that row's `input` itself — it doesn't.
+   */
+  toolId?: string;
 };
 
 /** How a tool approval settled: a user answer, expiry, or SDK cancellation. */

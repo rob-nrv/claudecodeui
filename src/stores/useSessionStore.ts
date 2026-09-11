@@ -13,6 +13,7 @@ import { authenticatedFetch } from '../utils/api';
 import type { LLMProvider } from '../types/app';
 
 import { removeOptimisticUserEchoes } from './sessionMessageReconciliation';
+import { applyToolUseInputPatch, dedupeIncomingRealtimeMessages } from './sessionRealtimeMerge';
 import {
   buildSessionMessagesUrl,
   hasReachedCachedTailTimeBoundary,
@@ -757,7 +758,9 @@ export function useSessionStore() {
       msg.sessionId === sessionId
         ? msg
         : { ...msg, sessionId };
-    let updated = [...slot.realtimeMessages, normalizedMessage];
+    const deduped = dedupeIncomingRealtimeMessages(slot.realtimeMessages, [normalizedMessage]);
+    if (deduped.length === 0) return;
+    let updated = [...slot.realtimeMessages, ...deduped];
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -777,11 +780,31 @@ export function useSessionStore() {
         ? msg
         : { ...msg, sessionId },
     );
-    let updated = [...slot.realtimeMessages, ...normalizedMessages];
+    const deduped = dedupeIncomingRealtimeMessages(slot.realtimeMessages, normalizedMessages);
+    if (deduped.length === 0) return;
+    let updated = [...slot.realtimeMessages, ...deduped];
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
     slot.realtimeMessages = updated;
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
+  }, [getSlot, notify]);
+
+  /**
+   * Patches a settled approval's effective input into its tool_use row, in
+   * both message arrays, so the fix applies whether that row currently lives
+   * in the persisted page or is still only a live/realtime entry.
+   */
+  const patchToolUseInput = useCallback((sessionId: string, toolId: string, toolInput: unknown) => {
+    const slot = getSlot(sessionId);
+    const nextServer = applyToolUseInputPatch(slot.serverMessages, toolId, toolInput);
+    const nextRealtime = applyToolUseInputPatch(slot.realtimeMessages, toolId, toolInput);
+    if (nextServer === slot.serverMessages && nextRealtime === slot.realtimeMessages) {
+      return;
+    }
+    slot.serverMessages = nextServer;
+    slot.realtimeMessages = nextRealtime;
     recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
@@ -917,6 +940,7 @@ export function useSessionStore() {
     fetchMore,
     appendRealtime,
     appendRealtimeBatch,
+    patchToolUseInput,
     refreshLatestFromServer,
     setActiveSession,
     setStatus,
@@ -928,7 +952,7 @@ export function useSessionStore() {
     getSessionSlot,
   }), [
     getSlot, has, fetchFromServer, fetchMore,
-    appendRealtime, appendRealtimeBatch, refreshLatestFromServer,
+    appendRealtime, appendRealtimeBatch, patchToolUseInput, refreshLatestFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
     clearRealtime, getMessages, getSessionSlot,
   ]);
