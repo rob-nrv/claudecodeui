@@ -869,14 +869,18 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       turnCompleteSent = true;
       if (!wasAborted) {
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 0 }));
+        // Aborted runs (explicit cancel, or the interrupt Steer performs on the
+        // turn it's superseding) never notify here — matching codex/cursor/
+        // opencode — so an interrupted turn doesn't push a stray "aborted"
+        // notification alongside whatever the superseding turn reports later.
+        notifyRunStopped({
+          userId: ws?.userId || null,
+          provider: 'claude',
+          sessionId: sessionId || capturedSessionId || null,
+          sessionName: sessionSummary,
+          stopReason: 'completed'
+        });
       }
-      notifyRunStopped({
-        userId: ws?.userId || null,
-        provider: 'claude',
-        sessionId: sessionId || capturedSessionId || null,
-        sessionName: sessionSummary,
-        stopReason: wasAborted ? 'aborted' : 'completed'
-      });
     }
     // Complete
 
