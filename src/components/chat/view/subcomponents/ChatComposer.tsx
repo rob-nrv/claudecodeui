@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type {
   ChangeEvent,
   ClipboardEvent,
@@ -10,7 +10,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon } from 'lucide-react';
+import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon, ZapIcon } from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
@@ -18,6 +18,7 @@ import type { QueuedDraft } from '../../hooks/useChatComposerState';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
 import { isOpenPermissionRequest } from '../../utils/permissionRequestState';
+import { isConfirmingSteerTap, reduceSteerConfirmation } from '../../utils/steerConfirmation';
 import type { ProviderModelOption } from '../../../../types/app';
 import {
   PromptInput,
@@ -66,6 +67,8 @@ interface ChatComposerProps {
   activity: SessionActivity | null;
   isLoading: boolean;
   onAbortSession: () => void;
+  /** FT-M06: interrupts the active run and immediately sends the composer's current content as its next turn. */
+  onSteerNow: () => Promise<boolean>;
   permissionMode: PermissionMode | string;
   availablePermissionModes: (PermissionMode | string)[];
   onSelectPermissionMode: (mode: PermissionMode | string) => void;
@@ -131,6 +134,7 @@ export default function ChatComposer({
   activity,
   isLoading,
   onAbortSession,
+  onSteerNow,
   permissionMode,
   availablePermissionModes,
   onSelectPermissionMode,
@@ -254,6 +258,55 @@ export default function ChatComposer({
 
   const hasQueuedDraft = Boolean(queuedDraft);
   const canQueueDraft = isLoading && Boolean(input.trim() || attachedFiles.length > 0);
+
+  // FT-M06: "Steer Now" — distinct from Queue's arrow-up button below, which
+  // stays exactly as it was (still means "send after"). Steer interrupts
+  // real in-flight work, so a single tap only arms it; the confirming
+  // second tap (`isConfirmingSteerTap`) is what actually sends, which
+  // doubles as the button's own double-tap guard.
+  const [steerState, dispatchSteer] = useReducer(reduceSteerConfirmation, 'idle');
+  const steerArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearSteerArmTimer = useCallback(() => {
+    if (steerArmTimerRef.current) {
+      clearTimeout(steerArmTimerRef.current);
+      steerArmTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => clearSteerArmTimer, [clearSteerArmTimer]);
+  useEffect(() => {
+    // Leaving the "something to queue or steer" window — sent, cleared, or
+    // the run itself ended — must not leave a stale armed/error state for
+    // the next time this button appears.
+    if (!canQueueDraft) {
+      clearSteerArmTimer();
+      dispatchSteer({ type: 'reset' });
+    }
+  }, [canQueueDraft, clearSteerArmTimer]);
+  const handleSteerButtonClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      if (steerState === 'sending') {
+        return;
+      }
+      const isConfirming = isConfirmingSteerTap(steerState);
+      clearSteerArmTimer();
+      dispatchSteer({ type: 'tap' });
+      if (!isConfirming) {
+        steerArmTimerRef.current = setTimeout(() => dispatchSteer({ type: 'armTimeout' }), 3000);
+        return;
+      }
+      void onSteerNow().then(
+        (delivered) => dispatchSteer({ type: 'sendSettled', ok: delivered }),
+        () => dispatchSteer({ type: 'sendSettled', ok: false }),
+      );
+    },
+    [steerState, clearSteerArmTimer, onSteerNow],
+  );
+  const steerTooltip = steerState === 'armed'
+    ? t('input.steer.confirm', { defaultValue: 'Tap again to steer now' })
+    : steerState === 'error'
+      ? t('input.steer.error', { defaultValue: 'Could not steer — tap to try again' })
+      : t('input.steer.action', { defaultValue: 'Steer now — interrupt the current run and send immediately' });
   const submitHint = canQueueDraft
     ? hasQueuedDraft
       ? t('input.hintText.updateQueued', { defaultValue: 'Enter to update queued message' })
@@ -477,6 +530,25 @@ export default function ChatComposer({
               onSelectPermissionMode={onSelectPermissionMode}
               providerLabel={providerLabel}
             />
+
+            {canQueueDraft && (
+              <PromptInputButton
+                onClick={handleSteerButtonClick}
+                disabled={steerState === 'sending'}
+                tooltip={{ content: steerTooltip }}
+                aria-label={steerTooltip}
+                title={steerTooltip}
+                className={
+                  steerState === 'armed'
+                    ? 'h-10 w-10 border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 sm:h-10 sm:w-10'
+                    : steerState === 'error'
+                      ? 'h-10 w-10 border border-red-500/30 text-red-600 dark:text-red-400 sm:h-10 sm:w-10'
+                      : 'h-10 w-10 sm:h-10 sm:w-10'
+                }
+              >
+                {steerState === 'sending' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ZapIcon className="h-4 w-4" />}
+              </PromptInputButton>
+            )}
 
             <PromptInputSubmit
               onClick={

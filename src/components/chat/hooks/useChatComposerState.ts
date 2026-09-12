@@ -107,6 +107,16 @@ interface UseChatComposerStateArgs {
    * a draft that was never its own.
    */
   suppressSharedProjectDraft?: boolean;
+  /**
+   * Sessions this tab has just told the server to steer (FT-M06):
+   * `handleSteerNow` adds the target session right before sending
+   * `chat.steer`, and `useChatRealtimeHandlers` consumes (removes) it when
+   * the interrupted turn's own `complete` arrives, so that specific stale
+   * terminal event never clears the "processing" indicator a moment before
+   * the steered turn's own activity appears. Shared with (created by)
+   * `ChatInterface`, the same pattern as `dismissedPermissionRequestIdsRef`.
+   */
+  steeringSessionIdsRef?: MutableRefObject<Set<string>>;
 }
 
 interface MentionableFile {
@@ -294,6 +304,7 @@ export function useChatComposerState({
   setPendingPermissionRequests,
   dismissedPermissionRequestIdsRef,
   suppressSharedProjectDraft = false,
+  steeringSessionIdsRef,
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
@@ -1375,6 +1386,111 @@ export function useChatComposerState({
     });
   }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
 
+  /**
+   * FT-M06: interrupts the ACTIVE run and immediately dispatches the
+   * composer's current content as the session's next turn — never through
+   * `queued_messages`, never a new session. Only meaningful while a run is
+   * genuinely in progress on an already-existing session; a brand-new,
+   * not-yet-created session has no active run to steer, so this is a no-op
+   * for it rather than falling back to creating one (that would silently
+   * turn Steer into a plain send).
+   *
+   * Returns whether the frame was actually sent, so the composer's
+   * arm/confirm button can tell a real dispatch from "nothing to send" or
+   * "socket closed" without waiting on the server's asynchronous verdict
+   * (`STEER_NOT_ACTIVE` arrives, if at all, as a normal `protocol_error` —
+   * the same generic path every other send error already surfaces through).
+   */
+  const handleSteerNow = useCallback(async (): Promise<boolean> => {
+    const targetSessionId = selectedSession?.id || currentSessionId || null;
+    if (!targetSessionId || !isLoading) {
+      return false;
+    }
+
+    const currentInput = inputValueRef.current;
+    const currentAttachments = attachedFiles;
+    if (!currentInput.trim() && currentAttachments.length === 0) {
+      return false;
+    }
+
+    let uploadedAttachments: unknown[] = [];
+    if (currentAttachments.length > 0) {
+      try {
+        uploadedAttachments = await uploadAttachmentFiles(currentAttachments);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Steer file upload failed:', error);
+        addMessage({
+          type: 'error',
+          content: `Failed to upload files: ${message}`,
+          timestamp: new Date(),
+        });
+        return false;
+      }
+    }
+
+    const attachmentRecords = uploadedAttachments as ChatAttachment[];
+    addMessage({
+      type: 'user',
+      content: currentInput,
+      images: attachmentRecords.filter(isImageAttachment),
+      files: attachmentRecords.filter((attachment) => !isImageAttachment(attachment)),
+      timestamp: new Date(),
+    });
+
+    // Recorded before sending: the interrupted turn's own terminal `complete`
+    // can arrive before the steered turn produces its first event, and must
+    // not be read as "this session is idle now" — see
+    // `useChatRealtimeHandlers`'s `complete` case.
+    steeringSessionIdsRef?.current.add(targetSessionId);
+
+    const delivered = sendMessage({
+      type: 'chat.steer',
+      sessionId: targetSessionId,
+      content: currentInput,
+      options: {
+        ...buildSendOptions(currentInput),
+        attachments: uploadedAttachments,
+      },
+    });
+
+    if (!delivered) {
+      // Never sent: the stale-complete guard above would otherwise wait
+      // forever for a `chat.steer` response that never went out.
+      steeringSessionIdsRef?.current.delete(targetSessionId);
+      return false;
+    }
+
+    onSessionProcessing?.(targetSessionId, { statusText: null, canInterrupt: true });
+    setInput('');
+    inputValueRef.current = '';
+    resetCommandMenuState();
+    setAttachedFiles([]);
+    setUploadingFiles(new Map());
+    setFileErrors(new Map());
+    setIsTextareaExpanded(false);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+    if (selectedProject) {
+      safeLocalStorage.removeItem(`draft_input_${selectedProject.projectId}`);
+    }
+
+    return true;
+  }, [
+    addMessage,
+    attachedFiles,
+    buildSendOptions,
+    currentSessionId,
+    isLoading,
+    onSessionProcessing,
+    resetCommandMenuState,
+    selectedProject,
+    selectedSession?.id,
+    sendMessage,
+    steeringSessionIdsRef,
+  ]);
+
   const handleGrantToolPermission = useCallback(
     (suggestion: { entry: string; toolName: string }) => {
       if (!suggestion || provider !== 'claude') {
@@ -1488,6 +1604,7 @@ export function useChatComposerState({
     syncInputOverlayScroll,
     handleClearInput,
     handleAbortSession,
+    handleSteerNow,
     handlePermissionDecision,
     handlePermissionDismiss,
     handleGrantToolPermission,

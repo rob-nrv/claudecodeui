@@ -42,6 +42,8 @@ export type PrdFile = {
 export type MainContentProps = {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
+  /** FT-M06: a URL session id (e.g. a notification deep-link) the backend confirmed does not exist or could not be reached. */
+  sessionNotFoundId?: string | null;
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   ws: WebSocket | null;
@@ -80,7 +82,7 @@ export type MainContentHeaderProps = {
 };
 
 export type MainContentStateViewProps = {
-  mode: 'loading' | 'empty';
+  mode: 'loading' | 'empty' | 'sessionNotFound';
   isMobile: boolean;
   onMenuClick: () => void;
 };

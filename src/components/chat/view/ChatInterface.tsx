@@ -51,6 +51,12 @@ function ChatInterface({
   const sessionStore = useSessionStore();
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamRef = useRef('');
+  // FT-M06: sessions this tab just told the server to steer — shared between
+  // the composer (writes, right before sending `chat.steer`) and the
+  // realtime handler (reads/consumes, when the interrupted turn's own
+  // `complete` arrives). See both hooks' doc comments for why this can't be
+  // derived from existing state.
+  const steeringSessionIdsRef = useRef<Set<string>>(new Set());
   // When each session's `chat.subscribe` was last sent; idle acks older than
   // a later local request are discarded as stale.
   const statusCheckSentAtRef = useRef(new Map<string, number>());
@@ -243,6 +249,7 @@ function ChatInterface({
     syncInputOverlayScroll,
     handleClearInput,
     handleAbortSession,
+    handleSteerNow,
     handlePermissionDecision,
     handlePermissionDismiss,
     handleGrantToolPermission,
@@ -280,6 +287,7 @@ function ChatInterface({
     dismissedPermissionRequestIdsRef,
     resolvePermissionModeForProvider,
     suppressSharedProjectDraft: isHandoffDraftActiveForSession,
+    steeringSessionIdsRef,
   });
 
   // FT-M05-R1: a handoff target's content is owned by that session alone
@@ -389,6 +397,7 @@ function ChatInterface({
     accumulatedStreamRef,
     lastSeqRef,
     statusCheckSentAtRef,
+    steeringSessionIdsRef,
     onSessionProcessing,
     onSessionIdle,
     onWebSocketReconnect: handleWebSocketReconnect,
@@ -566,6 +575,7 @@ function ChatInterface({
           activity={sessionActivity}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}
+          onSteerNow={handleSteerNow}
           permissionMode={permissionMode}
           availablePermissionModes={availablePermissionModes}
           onSelectPermissionMode={(mode) => selectPermissionMode(mode as PermissionMode)}

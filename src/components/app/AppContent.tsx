@@ -67,6 +67,7 @@ function AppContentInner() {
   const {
     selectedProject,
     selectedSession,
+    sessionNotFoundId,
     activeTab,
     sidebarOpen,
     isLoadingProjects,
@@ -247,6 +248,7 @@ function AppContentInner() {
         <MainContent
           selectedProject={selectedProject}
           selectedSession={selectedSession}
+          sessionNotFoundId={sessionNotFoundId}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           ws={ws}

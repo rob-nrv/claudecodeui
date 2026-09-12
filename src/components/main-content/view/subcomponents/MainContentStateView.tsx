@@ -1,12 +1,15 @@
-import { Folder } from 'lucide-react';
+import { Folder, SearchX } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import type { MainContentStateViewProps } from '../../types/types';
+
 import MobileMenuButton from './MobileMenuButton';
 
 export default function MainContentStateView({ mode, isMobile, onMenuClick }: MainContentStateViewProps) {
   const { t } = useTranslation();
 
   const isLoading = mode === 'loading';
+  const isSessionNotFound = mode === 'sessionNotFound';
 
   return (
     <div className="flex h-full flex-col">
@@ -31,6 +34,22 @@ export default function MainContentStateView({ mode, isMobile, onMenuClick }: Ma
             </div>
             <h2 className="mb-1 text-lg font-semibold text-foreground">{t('mainContent.loading')}</h2>
             <p className="text-sm">{t('mainContent.settingUpWorkspace')}</p>
+          </div>
+        </div>
+      ) : isSessionNotFound ? (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="mx-auto max-w-md px-6 text-center">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/50">
+              <SearchX className="h-7 w-7 text-muted-foreground" />
+            </div>
+            <h2 className="mb-2 text-xl font-semibold text-foreground">
+              {t('mainContent.sessionNotFound.title', { defaultValue: 'Session not found' })}
+            </h2>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              {t('mainContent.sessionNotFound.description', {
+                defaultValue: 'This session no longer exists, or could not be reached. It may have been deleted.',
+              })}
+            </p>
           </div>
         </div>
       ) : (

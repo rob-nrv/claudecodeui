@@ -306,6 +306,52 @@ async function handleChatAbort(
 }
 
 /**
+ * Handles `chat.steer` (FT-M06): interrupts the session's ACTIVE run and
+ * immediately dispatches the given content as the session's next turn — the
+ * one primitive in this codebase that genuinely acts on the run in progress,
+ * as opposed to Queue (`queued_messages`), which only ever runs after the
+ * current turn finishes on its own.
+ *
+ * Deliberately thin: the interrupt half is byte-for-byte `handleChatAbort`'s
+ * own logic (same "explicit error if nothing is running", same "complete the
+ * run whether or not the provider's interrupt call itself reports success" —
+ * a stalled provider process must never wedge Steer), and the dispatch half
+ * is a literal `handleChatSend` call, so a steered send is indistinguishable
+ * from a normal one to every downstream concern (provider/profile
+ * resolution, model/effort persistence, attachment validation) — nothing
+ * here ever writes to `queued_messages`, and no new session is created; this
+ * is the same session, same native id, continued.
+ */
+async function handleChatSteer(
+  ws: WebSocket,
+  userId: string | number | null,
+  data: AnyRecord,
+  dependencies: ChatWebSocketDependencies
+): Promise<void> {
+  const sessionId = readRequiredSessionId(data);
+  if (!sessionId) {
+    sendProtocolError(ws, 'SESSION_ID_REQUIRED', 'chat.steer requires a sessionId.');
+    return;
+  }
+
+  // Verified fresh against the registry, never trusted from client state: the
+  // run may have finished a moment before this message arrived.
+  const run = chatRunRegistry.getRun(sessionId);
+  if (!run || run.status !== 'running') {
+    sendProtocolError(ws, 'STEER_NOT_ACTIVE', `Session "${sessionId}" has no active run to steer.`, sessionId);
+    return;
+  }
+
+  const interrupted = await dependencies.runtime.abort(run.provider, sessionId);
+  chatRunRegistry.completeRun(sessionId, {
+    exitCode: interrupted ? 0 : 1,
+    aborted: true,
+  });
+
+  await handleChatSend(ws, userId, { ...data, type: 'chat.send' }, dependencies);
+}
+
+/**
  * Handles `chat.subscribe`: for each requested session, reports whether a run
  * is processing, re-attaches the live stream to this socket, replays missed
  * events (seq > lastSeq), and includes pending permission requests.
@@ -456,6 +502,9 @@ export function handleChatConnection(
           return;
         case 'chat.abort':
           await handleChatAbort(ws, data, dependencies);
+          return;
+        case 'chat.steer':
+          await handleChatSteer(ws, userId, data, dependencies);
           return;
         case 'chat.subscribe':
           handleChatSubscribe(ws, data, dependencies);

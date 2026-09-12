@@ -37,6 +37,7 @@ type TasksSettingsContextValue = {
 function MainContent({
   selectedProject,
   selectedSession,
+  sessionNotFoundId,
   activeTab,
   setActiveTab,
   ws,
@@ -148,6 +149,13 @@ function MainContent({
 
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
+  }
+
+  // FT-M06: takes precedence over the generic "choose a project" empty state
+  // so a stale/deleted-session deep-link (notification or otherwise) says so
+  // explicitly, rather than silently landing on an unrelated project.
+  if (!selectedProject && sessionNotFoundId) {
+    return <MainContentStateView mode="sessionNotFound" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
   if (!selectedProject) {

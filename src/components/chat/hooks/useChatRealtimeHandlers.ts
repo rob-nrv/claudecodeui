@@ -54,6 +54,15 @@ interface UseChatRealtimeHandlersArgs {
   onWebSocketReconnect?: () => void;
   requestLatestMessages: (sessionId: string, allowNetwork?: boolean) => Promise<void>;
   sessionStore: SessionStore;
+  /**
+   * Sessions this tab just told the server to steer (FT-M06, written by
+   * `useChatComposerState`'s `handleSteerNow`). A `chat.steer` interrupts the
+   * active run, which produces its own terminal `complete` for the
+   * INTERRUPTED turn before the steered turn's replacement starts — that
+   * specific `complete` must not clear the processing indicator, or the UI
+   * would show "idle" for a session that is, in truth, still working.
+   */
+  steeringSessionIdsRef?: MutableRefObject<Set<string>>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -88,6 +97,7 @@ export function useChatRealtimeHandlers({
   onWebSocketReconnect,
   requestLatestMessages,
   sessionStore,
+  steeringSessionIdsRef,
 }: UseChatRealtimeHandlersArgs) {
   // Session switches can send `chat.subscribe` before this effect has a chance
   // to rebind the websocket listener. Read the visible session id from a ref
@@ -268,11 +278,22 @@ export function useChatRealtimeHandlers({
           }
           accumulatedStreamRef.current = '';
 
+          // FT-M06: a `chat.steer` interrupts the active run before
+          // immediately dispatching its replacement, so this `complete`
+          // (marked `aborted`) can describe a turn this same tab already
+          // knows is being superseded — clearing the indicator for it would
+          // show "idle" for a session actually still working. `.delete`
+          // both checks and consumes the flag, so only the ONE `complete`
+          // this steer produced is ever suppressed.
+          const isSteerSupersededComplete = Boolean(sid) && Boolean(steeringSessionIdsRef?.current.delete(sid as string));
+
           // `complete` is the unified terminal event — every provider run ends
           // with exactly one, regardless of success, failure, or abort. The
           // indicator derives from the processing map, so deleting the entry
           // hides it immediately and atomically.
-          onSessionIdle?.(sid);
+          if (!isSteerSupersededComplete) {
+            onSessionIdle?.(sid);
+          }
           if (sid === activeViewSessionId) {
             // Nothing is answerable once the run ended; expired notices stay.
             pendingPermissionRequestsRef.current = clearOpenPermissionRequests(pendingPermissionRequestsRef.current);
@@ -398,5 +419,6 @@ export function useChatRealtimeHandlers({
     onWebSocketReconnect,
     requestLatestMessages,
     sessionStore,
+    steeringSessionIdsRef,
   ]);
 }

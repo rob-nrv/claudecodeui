@@ -444,9 +444,15 @@ export function useProjectsState({
   sessionIdRef.current = sessionId;
   /** URL session id whose backend lookup already ran (or is in flight) — one attempt per id. */
   const sessionLookupRef = useRef<string | null>(null);
+  // FT-M06: the URL names a session (e.g. a notification deep-link) the
+  // backend confirmed does not exist or could not be reached — distinct from
+  // "nothing selected yet" so the UI can say so explicitly instead of
+  // silently guessing a project/provider identity for it.
+  const [sessionNotFoundId, setSessionNotFoundId] = useState<string | null>(null);
 
   useEffect(() => {
     sessionLookupRef.current = null;
+    setSessionNotFoundId(null);
   }, [sessionId]);
 
   const markSessionAttention = useCallback((targetSessionId?: string | null) => {
@@ -880,21 +886,15 @@ export function useProjectsState({
       }
 
       if (!details) {
-        // Unknown session id (or lookup failed). Fall back to the legacy
-        // behavior: host a placeholder under the currently selected project so
-        // chat state stays alive (without a `selectedSession`, chat clears
-        // `currentSessionId` and stops reading the session store).
-        const fallbackProject = selectedProjectRef.current;
-        if (!fallbackProject || selectedSessionRef.current?.id === sessionId) {
-          return;
-        }
-
-        setSelectedSession({
-          id: sessionId,
-          __provider: readSelectedProvider(),
-          __projectId: fallbackProject.projectId,
-          summary: '',
-        });
+        // Unknown session id (deleted, or the lookup failed): never guess a
+        // project/provider identity for it — the old fallback used to host a
+        // placeholder under whatever project happened to already be
+        // selected, with a provider read from local storage, which a
+        // notification deep-link (or any stale link) could point at a
+        // completely unrelated account without the user ever being told the
+        // real target was gone. Surface that explicitly instead.
+        console.error(`Session "${sessionId}" was not found or could not be reached.`);
+        setSessionNotFoundId(sessionId);
         return;
       }
 
@@ -1184,6 +1184,7 @@ export function useProjectsState({
     projects,
     selectedProject,
     selectedSession,
+    sessionNotFoundId,
     activeTab,
     sidebarOpen,
     isLoadingProjects,
