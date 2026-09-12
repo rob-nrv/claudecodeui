@@ -17,6 +17,7 @@ import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
 import { TaskMasterPanel } from '../../task-master';
+import { useSessionLineage } from '../../session-handoff/hooks/useSessionLineage';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -64,6 +65,17 @@ function MainContent({
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
   const shouldShowBrowserTab = browserUseEnabled;
+
+  // FT-M05 handoff lineage for the open session, shared by the header and the
+  // chat. Refetched when the session's run starts or stops, so a target's
+  // "started" state and new outgoing handoffs come from the backend.
+  const selectedSessionId = selectedSession?.id ?? null;
+  const isSelectedSessionProcessing = selectedSessionId ? processingSessions.has(selectedSessionId) : false;
+  const { lineage: sessionLineage } = useSessionLineage(selectedSessionId, isSelectedSessionProcessing);
+  const navigateToSession = useCallback(
+    (targetSessionId: string) => onNavigateToSession(targetSessionId),
+    [onNavigateToSession],
+  );
 
   const {
     editingFile,
@@ -153,6 +165,8 @@ function MainContent({
         shouldShowBrowserTab={shouldShowBrowserTab}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
+        sessionLineage={sessionLineage}
+        onNavigateToSession={navigateToSession}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -179,6 +193,7 @@ function MainContent({
                 externalMessageUpdate={externalMessageUpdate}
                 newSessionTrigger={newSessionTrigger}
                 onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
+                sessionLineage={sessionLineage}
               />
             </ErrorBoundary>
           </div>

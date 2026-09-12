@@ -18,6 +18,9 @@ export { pushSubscriptionsDb } from '@/modules/database/repositories/push-subscr
 export { queuedMessagesDb } from '@/modules/database/repositories/queued-messages.db.js';
 export type { QueuedMessageRow } from '@/modules/database/repositories/queued-messages.db.js';
 export { scanStateDb } from '@/modules/database/repositories/scan-state.db.js';
+// sessionHandoffsDb: used by Providers to persist FT-M05 Task handoff lineage (source run -> new target run).
+export { sessionHandoffsDb } from '@/modules/database/repositories/session-handoffs.db.js';
+export type { SessionHandoffRow } from '@/modules/database/repositories/session-handoffs.db.js';
 export { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 export { userDb } from '@/modules/database/repositories/users.js';
 export { vapidKeysDb } from '@/modules/database/repositories/vapid-keys.js';

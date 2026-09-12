@@ -214,6 +214,16 @@ export const api = {
   },
   providerSessionId: (sessionId) =>
     authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/provider-id`),
+  // FT-M05 Task handoff: explicit targets, creation of a NEW run, and lineage.
+  sessionHandoffTargets: (sessionId) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/handoff/targets`),
+  createSessionHandoff: (sessionId, target) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/handoff`, {
+      method: 'POST',
+      body: JSON.stringify(target),
+    }),
+  sessionLineage: (sessionId) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/lineage`),
   restoreSession: (sessionId) =>
     authenticatedFetch(`/api/providers/sessions/${sessionId}/restore`, {
       method: 'POST',

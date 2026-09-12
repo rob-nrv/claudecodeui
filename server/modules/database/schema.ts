@@ -202,6 +202,39 @@ CREATE TABLE IF NOT EXISTS queued_messages (
 );
 `;
 
+/**
+ * Lineage of explicit Task handoffs (FT-M05). A session row is one Run/Leg —
+ * one provider, one immutable Claude account binding, one native session — so
+ * switching account or provider never edits a row: it creates a NEW target
+ * session and records one row here linking it to its source.
+ *
+ * Every `source_*` column is a snapshot taken at handoff time, so provenance
+ * survives the source session being renamed, archived or deleted (which is
+ * why only the target carries a foreign key). `task_root_session_id` is the
+ * first session of the chain, the durable identity of the Task itself.
+ * `handoff_package` is the portable context shown to the user before the
+ * target's first send; it never contains credentials or config paths.
+ */
+export const SESSION_HANDOFFS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS session_handoffs (
+    handoff_id TEXT PRIMARY KEY NOT NULL,
+    target_session_id TEXT NOT NULL UNIQUE,
+    source_session_id TEXT NOT NULL,
+    task_root_session_id TEXT NOT NULL,
+    source_provider TEXT NOT NULL,
+    source_claude_profile_id TEXT,
+    source_provider_session_id TEXT,
+    source_model TEXT,
+    source_effort TEXT,
+    source_title TEXT,
+    target_provider TEXT NOT NULL,
+    target_claude_profile_id TEXT,
+    handoff_package TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (target_session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -254,4 +287,7 @@ ${CLAUDE_PROFILES_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_claude_profiles_is_default ON claude_profiles(is_default);
 
 ${QUEUED_MESSAGES_TABLE_SCHEMA_SQL}
+
+${SESSION_HANDOFFS_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_session_handoffs_source ON session_handoffs(source_session_id);
 `;

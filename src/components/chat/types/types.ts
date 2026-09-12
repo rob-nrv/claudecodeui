@@ -4,6 +4,7 @@ import type {
   MarkSessionProcessing,
   SessionActivityMap,
 } from '../../../hooks/useSessionProtection';
+import type { SessionLineage } from '../../session-handoff/types/types';
 
 export type Provider = LLMProvider;
 
@@ -161,4 +162,6 @@ export interface ChatInterfaceProps {
   newSessionTrigger?: number;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
+  /** Backend handoff lineage of `selectedSession` (FT-M05), or null. */
+  sessionLineage?: SessionLineage | null;
 }

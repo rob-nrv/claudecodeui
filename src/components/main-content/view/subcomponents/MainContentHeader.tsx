@@ -18,6 +18,8 @@ export default function MainContentHeader({
   shouldShowBrowserTab,
   isMobile,
   onMenuClick,
+  sessionLineage,
+  onNavigateToSession,
 }: MainContentHeaderProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -90,6 +92,8 @@ export default function MainContentHeader({
             selectedProject={selectedProject}
             selectedSession={selectedSession}
             shouldShowTasksTab={shouldShowTasksTab}
+            sessionLineage={sessionLineage}
+            onNavigateToSession={onNavigateToSession}
           />
         </div>
 

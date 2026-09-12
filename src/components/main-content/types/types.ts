@@ -8,6 +8,7 @@ import type {
 } from '../../../hooks/useSessionProtection';
 import type { SessionEstablishedContext, SessionNavigationOptions } from '../../chat/types/types';
 import type { SettingsMainTab } from '../../settings/types/types';
+import type { SessionLineage } from '../../session-handoff/types/types';
 
 export type TaskMasterTask = {
   id: string | number;
@@ -73,6 +74,9 @@ export type MainContentHeaderProps = {
   shouldShowBrowserTab: boolean;
   isMobile: boolean;
   onMenuClick: () => void;
+  /** Backend handoff lineage of `selectedSession` (FT-M05), or null. */
+  sessionLineage: SessionLineage | null;
+  onNavigateToSession: (sessionId: string) => void;
 };
 
 export type MainContentStateViewProps = {

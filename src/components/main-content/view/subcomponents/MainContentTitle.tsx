@@ -8,12 +8,17 @@ import { getSessionTitle } from '../../../../utils/pageTitle';
 import { resolveExecutionIdentity, shouldShowProfileIdentity } from '../../../../shared/identity';
 import ExecutionIdentityBadge from '../../../identity/view/ExecutionIdentityBadge';
 import { useClaudeProfiles } from '../../../settings/hooks/useClaudeProfiles';
+import type { SessionLineage } from '../../../session-handoff/types/types';
+import SessionLineageLink from '../../../session-handoff/view/SessionLineageLink';
 
 type MainContentTitleProps = {
   activeTab: AppTab;
   selectedProject: Project;
   selectedSession: ProjectSession | null;
   shouldShowTasksTab: boolean;
+  /** Backend handoff lineage of `selectedSession` (FT-M05), or null. */
+  sessionLineage: SessionLineage | null;
+  onNavigateToSession: (sessionId: string) => void;
 };
 
 function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: string) => string, pluginDisplayName?: string) {
@@ -45,6 +50,8 @@ export default function MainContentTitle({
   selectedProject,
   selectedSession,
   shouldShowTasksTab,
+  sessionLineage,
+  onNavigateToSession,
 }: MainContentTitleProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
@@ -100,6 +107,16 @@ export default function MainContentTitle({
                 <>
                   <span aria-hidden="true" className="flex-shrink-0">·</span>
                   <ExecutionIdentityBadge identity={executionIdentity} className="max-w-[45%] flex-shrink-0" />
+                </>
+              )}
+              {(sessionLineage?.incoming || (sessionLineage?.outgoing.length ?? 0) > 0) && (
+                <>
+                  <span aria-hidden="true" className="flex-shrink-0">·</span>
+                  <SessionLineageLink
+                    lineage={sessionLineage}
+                    onNavigateToSession={onNavigateToSession}
+                    className="min-w-0 max-w-[45%] truncate text-left underline-offset-2 hover:underline"
+                  />
                 </>
               )}
             </div>

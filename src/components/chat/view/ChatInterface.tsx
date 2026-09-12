@@ -13,6 +13,9 @@ import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
+import { resolveExecutionIdentity } from '../../../shared/identity';
+import { resolveHandoffPrefill } from '../../session-handoff/utils/handoff';
+import SessionLineageNotice from '../../session-handoff/view/SessionLineageNotice';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -38,6 +41,7 @@ function ChatInterface({
   externalMessageUpdate,
   newSessionTrigger,
   onShowAllTasks,
+  sessionLineage = null,
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { subscribe } = useWebSocket();
@@ -262,6 +266,67 @@ function ChatInterface({
     resolvePermissionModeForProvider,
   });
 
+  // FT-M05: a handoff target starts as a fresh run. Until its first send, its
+  // backend-persisted handoff package is placed in the composer once (never
+  // over text the user already typed) so the user reviews exactly what the
+  // new account/provider will receive.
+  const selectedSessionId = selectedSession?.id ?? null;
+  const incomingHandoff = sessionLineage?.sessionId === selectedSessionId ? sessionLineage?.incoming ?? null : null;
+  const handoffPackageToPrefill = resolveHandoffPrefill({
+    lineage: sessionLineage,
+    sessionId: selectedSessionId,
+    hasMessages: chatMessages.length > 0,
+    isBusy: isProcessing || isLoadingSessionMessages,
+  });
+  const prefilledHandoffRef = useRef<{ sessionId: string; handoffPackage: string } | null>(null);
+  useEffect(() => {
+    const prefilled = prefilledHandoffRef.current;
+    if (prefilled && prefilled.sessionId !== selectedSessionId) {
+      // Composer drafts are per project, not per session: an unsent, untouched
+      // package must never follow the user into the source (or any other)
+      // session, where sending it would go to the wrong account.
+      if (input.trim() === prefilled.handoffPackage.trim()) {
+        setInput('');
+      }
+      prefilledHandoffRef.current = null;
+    }
+    if (!handoffPackageToPrefill || !selectedSessionId || prefilledHandoffRef.current?.sessionId === selectedSessionId) {
+      return;
+    }
+    prefilledHandoffRef.current = { sessionId: selectedSessionId, handoffPackage: handoffPackageToPrefill };
+    if (!input.trim()) {
+      setInput(handoffPackageToPrefill);
+    }
+  }, [handoffPackageToPrefill, selectedSessionId, input, setInput]);
+
+  const claudeProfileNamesById = useMemo(
+    () => new Map(claudeProfiles.map((profile) => [profile.id, profile.displayName])),
+    [claudeProfiles],
+  );
+  const handoffNoticeLabels = useMemo(() => {
+    if (!incomingHandoff) {
+      return null;
+    }
+    const unresolvedLabel = t('handoff.removedAccount', { defaultValue: 'removed account' });
+    return {
+      target: resolveExecutionIdentity({
+        provider: incomingHandoff.targetProvider,
+        claudeProfileId: incomingHandoff.targetClaudeProfileId,
+        profileNamesById: claudeProfileNamesById,
+        unresolvedLabel,
+      }).fullLabel,
+      source: resolveExecutionIdentity({
+        provider: incomingHandoff.sourceProvider,
+        claudeProfileId: incomingHandoff.sourceClaudeProfileId,
+        profileNamesById: claudeProfileNamesById,
+        unresolvedLabel,
+      }).fullLabel,
+    };
+  }, [incomingHandoff, claudeProfileNamesById, t]);
+  const showHandoffNotice = Boolean(
+    incomingHandoff && handoffNoticeLabels && !incomingHandoff.targetStarted && chatMessages.length === 0 && !isProcessing,
+  );
+
   // On WebSocket reconnect, request a bounded persisted-tail sync (deferred
   // while Chat is hidden), then re-subscribe — the
   // `chat_subscribed` ack restores or clears the activity indicator, replays
@@ -434,6 +499,20 @@ function ChatInterface({
         />
 
         <div className="relative flex-shrink-0">
+          {showHandoffNotice && incomingHandoff && handoffNoticeLabels && (
+            <SessionLineageNotice
+              targetLabel={handoffNoticeLabels.target}
+              sourceLabel={handoffNoticeLabels.source}
+              sourceTitle={incomingHandoff.sourceTitle || t('handoff.previousRun', { defaultValue: 'previous run' })}
+              canOpenSource={incomingHandoff.sourceExists}
+              isContextInComposer={input.trim() === incomingHandoff.handoffPackage.trim()}
+              onOpenSource={() => onNavigateToSession?.(incomingHandoff.sourceSessionId)}
+              onUseContext={() => {
+                setInput(incomingHandoff.handoffPackage);
+                textareaRef.current?.focus();
+              }}
+            />
+          )}
           {isUserScrolledUp && chatMessages.length > 0 && (
             <div className="pointer-events-none absolute -top-11 left-0 right-0 z-20 flex justify-center">
               <button

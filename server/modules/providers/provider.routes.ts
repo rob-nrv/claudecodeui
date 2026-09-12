@@ -9,6 +9,7 @@ import { providerTokenUsageService } from '@/modules/providers/services/provider
 import { queuedMessagesService } from '@/modules/providers/services/queued-messages.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
+import { sessionHandoffService } from '@/modules/providers/services/session-handoff.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import type {
   CustomProviderModelInput,
@@ -297,6 +298,61 @@ const parseProvider = (value: unknown): LLMProvider => {
     code: 'UNSUPPORTED_PROVIDER',
     statusCode: 400,
   });
+};
+
+const MAX_HANDOFF_NOTE_LENGTH = 2000;
+
+/**
+ * The target is always explicit: `provider` is required, and `claudeProfileId`
+ * is forwarded as `undefined` when absent so the service can refuse a Claude
+ * target whose account was not chosen instead of defaulting one.
+ */
+const parseSessionHandoffPayload = (payload: unknown): {
+  provider: LLMProvider;
+  claudeProfileId?: string | null;
+  note: string | null;
+} => {
+  if (!payload || typeof payload !== 'object') {
+    throw new AppError('Request body must be an object.', {
+      code: 'INVALID_REQUEST_BODY',
+      statusCode: 400,
+    });
+  }
+
+  const body = payload as Record<string, unknown>;
+  if (body.provider === undefined || body.provider === null) {
+    throw new AppError('provider is required.', {
+      code: 'HANDOFF_TARGET_PROVIDER_REQUIRED',
+      statusCode: 400,
+    });
+  }
+  const provider = parseProvider(body.provider);
+
+  let claudeProfileId: string | null | undefined;
+  if (body.claudeProfileId === null) {
+    claudeProfileId = null;
+  } else if (typeof body.claudeProfileId === 'string' && body.claudeProfileId.trim()) {
+    claudeProfileId = body.claudeProfileId.trim();
+  } else if (body.claudeProfileId !== undefined) {
+    throw new AppError('claudeProfileId must be a profile id or null.', {
+      code: 'HANDOFF_TARGET_PROFILE_INVALID',
+      statusCode: 400,
+    });
+  }
+
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  if (note.length > MAX_HANDOFF_NOTE_LENGTH) {
+    throw new AppError(`note must not exceed ${MAX_HANDOFF_NOTE_LENGTH} characters.`, {
+      code: 'INVALID_HANDOFF_NOTE',
+      statusCode: 400,
+    });
+  }
+
+  return {
+    provider,
+    ...(claudeProfileId !== undefined ? { claudeProfileId } : {}),
+    note: note || null,
+  };
 };
 
 const parseSessionRenameSummary = (payload: unknown): string => {
@@ -850,6 +906,36 @@ router.post(
     const sessionId = parseSessionId(req.params.sessionId);
     const result = sessionsService.restoreSessionById(sessionId);
     res.json(createApiSuccessResponse(result));
+  }),
+);
+
+// ----------------- Task handoff routes (FT-M05) -----------------
+router.get(
+  '/sessions/:sessionId/handoff/targets',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    res.json(createApiSuccessResponse(sessionHandoffService.listTargets(sessionId)));
+  }),
+);
+
+/**
+ * Continues a session's Task in a NEW session bound to the explicitly chosen
+ * provider/account. The source session is never modified.
+ */
+router.post(
+  '/sessions/:sessionId/handoff',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const result = await sessionHandoffService.createHandoff(sessionId, parseSessionHandoffPayload(req.body));
+    res.status(201).json(createApiSuccessResponse(result));
+  }),
+);
+
+router.get(
+  '/sessions/:sessionId/lineage',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    res.json(createApiSuccessResponse(sessionHandoffService.getLineage(sessionId)));
   }),
 );
 

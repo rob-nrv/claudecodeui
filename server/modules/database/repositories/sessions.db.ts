@@ -343,6 +343,12 @@ export const sessionsDb = {
    * This helper lets the synchronizer claim the pending app row first, so the
    * provider id is attached before any watcher-created row exists. The result
    * is simpler than frontend dedupe and keeps the race resolved at the source.
+   *
+   * Handoff targets (FT-M05) are excluded: unlike a composer-created row,
+   * which is claimed within the same send, a handoff target can wait unsent
+   * indefinitely, and letting an unrelated provider session claim it would
+   * attach foreign history to a run that carries handoff provenance. If one
+   * is ever indexed first, `assignProviderSessionId` still merges it.
    */
   findLatestPendingAppSession(provider: string, projectPath: string): SessionRow | null {
     const db = getConnection();
@@ -355,6 +361,10 @@ export const sessionsDb = {
            AND project_path = ?
            AND provider_session_id IS NULL
            AND isArchived = 0
+           AND NOT EXISTS (
+             SELECT 1 FROM session_handoffs
+             WHERE session_handoffs.target_session_id = sessions.session_id
+           )
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
          LIMIT 1`
       )

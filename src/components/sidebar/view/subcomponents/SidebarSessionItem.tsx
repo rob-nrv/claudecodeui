@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Edit2, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { ArrowRightLeft, Check, Copy, Edit2, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu, Badge, Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants } from '../../../../shared/view/ui';
@@ -14,6 +14,9 @@ import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel, formatCompactAge, formatElapsedDuration } from '../../utils/utils';
 import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
 import { readQueuedMessage } from '../../../chat/utils/chatStorage';
+import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
+import type { CreatedHandoff } from '../../../session-handoff/types/types';
+import SessionHandoffDialog from '../../../session-handoff/view/SessionHandoffDialog';
 
 type SidebarSessionItemProps = {
   project: Project;
@@ -75,6 +78,27 @@ export default function SidebarSessionItem({
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [providerSessionId, setProviderSessionId] = useState<string | null>(null);
   const providerIdRequestRef = useRef(0);
+  const [isHandoffOpen, setIsHandoffOpen] = useState(false);
+  const handoffFromMobileRef = useRef(false);
+  const paletteOps = usePaletteOps();
+
+  // A handoff target is a brand-new session: open it the same way a row tap
+  // would (mobile also collapses the sidebar through project selection), then
+  // resync the sidebar so the new row appears with its backend binding.
+  const openHandoffTarget = (result: CreatedHandoff) => {
+    const targetSession: SessionWithProvider = {
+      id: result.sessionId,
+      __provider: result.provider,
+      __projectId: project.projectId,
+      summary: result.sessionName,
+      claudeProfileId: result.claudeProfileId,
+    };
+    if (handoffFromMobileRef.current) {
+      onProjectSelect(project);
+    }
+    onSessionSelect(targetSession, project.projectId);
+    void paletteOps.refreshProjects();
+  };
   const showAttentionIndicator = needsAttention && !isSelected;
   const showRecentIndicator = !showAttentionIndicator && !isProcessing && sessionView.isActive;
   const providerLabel = PROVIDER_LABELS[session.__provider];
@@ -451,6 +475,22 @@ export default function SidebarSessionItem({
                   </span>
                 </button>
 
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileOptionsOpen(false);
+                    handoffFromMobileRef.current = true;
+                    setIsHandoffOpen(true);
+                  }}
+                  className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border bg-muted/35 px-4 py-3 text-left text-foreground transition-colors active:bg-muted"
+                >
+                  <ArrowRightLeft className="h-5 w-5 flex-shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">Continue in a new run…</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">Another account or provider; this session stays unchanged.</span>
+                  </span>
+                </button>
+
                 {!isProcessing && (
                   <button
                     type="button"
@@ -630,6 +670,16 @@ export default function SidebarSessionItem({
                     closeOnSelect: false,
                     onSelect: handleCopyAction,
                   },
+                  {
+                    key: 'handoff',
+                    label: 'Continue in a new run…',
+                    description: 'Another account or provider; this session stays unchanged.',
+                    icon: ArrowRightLeft,
+                    onSelect: () => {
+                      handoffFromMobileRef.current = false;
+                      setIsHandoffOpen(true);
+                    },
+                  },
                   ...(!isProcessing ? [{
                     key: 'delete',
                     label: 'Archive or delete session',
@@ -643,6 +693,16 @@ export default function SidebarSessionItem({
             )}
           </div>
       </div>
+
+      {isHandoffOpen && (
+        <SessionHandoffDialog
+          open={isHandoffOpen}
+          onOpenChange={setIsHandoffOpen}
+          sessionId={session.id}
+          sessionTitle={sessionView.sessionName}
+          onCreated={openHandoffTarget}
+        />
+      )}
     </div>
   );
 }

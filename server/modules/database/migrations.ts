@@ -391,16 +391,28 @@ const rebuildSessionsTableWithProjectSchema = (db: Database): void => {
  * Rows that existed before this migration were always keyed directly by the
  * provider-native session id, so backfilling `provider_session_id` with
  * `session_id` keeps every legacy row resolvable through the new mapping.
+ *
+ * FT-M05 handoff targets are never backfilled: they are app-allocated rows
+ * that legitimately wait for their first send, and this runs on every start —
+ * backfilling one would make an unsent target look started and resume a
+ * native session that does not exist.
  */
 const addProviderSessionIdMapping = (db: Database): void => {
   const sessionsTableInfo = getTableInfo(db, 'sessions');
   const columnNames = sessionsTableInfo.map((column) => column.name);
 
   addColumnToTableIfNotExists(db, 'sessions', columnNames, 'provider_session_id', 'TEXT');
+  const excludeHandoffTargets = tableExists(db, 'session_handoffs')
+    ? `AND NOT EXISTS (
+         SELECT 1 FROM session_handoffs
+         WHERE session_handoffs.target_session_id = sessions.session_id
+       )`
+    : '';
   db.exec(`
     UPDATE sessions
     SET provider_session_id = session_id
     WHERE provider_session_id IS NULL
+    ${excludeHandoffTargets}
   `);
 };
 
