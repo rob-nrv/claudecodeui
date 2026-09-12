@@ -97,6 +97,16 @@ interface UseChatComposerStateArgs {
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   /** Expired approvals dismissed in this tab (owned by useChatProviderState). */
   dismissedPermissionRequestIdsRef: MutableRefObject<Set<string>>;
+  /**
+   * True while the active session's composer content is owned by something
+   * other than the project-wide draft (FT-M05: an unsent handoff package,
+   * scoped to its target session only). While true, `input` is never written
+   * to `draft_input_<projectId>` — that key is shared by every session in the
+   * project, so persisting it there would let the very next session opened
+   * in this project (a reload landing on a different session included) load
+   * a draft that was never its own.
+   */
+  suppressSharedProjectDraft?: boolean;
 }
 
 interface MentionableFile {
@@ -283,6 +293,7 @@ export function useChatComposerState({
   pendingPermissionRequests,
   setPendingPermissionRequests,
   dismissedPermissionRequestIdsRef,
+  suppressSharedProjectDraft = false,
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
@@ -1146,7 +1157,7 @@ export function useChatComposerState({
   }, [selectedProjectId]);
 
   useEffect(() => {
-    if (!selectedProjectId) {
+    if (!selectedProjectId || suppressSharedProjectDraft) {
       return;
     }
     if (input !== '') {
@@ -1154,7 +1165,7 @@ export function useChatComposerState({
     } else {
       safeLocalStorage.removeItem(`draft_input_${selectedProjectId}`);
     }
-  }, [input, selectedProjectId]);
+  }, [input, selectedProjectId, suppressSharedProjectDraft]);
 
   // Persist the queued draft under its session's key. Must be defined BEFORE
   // the swap effect below: on a session switch there is one commit where

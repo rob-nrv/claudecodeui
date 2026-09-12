@@ -14,7 +14,8 @@ import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
 import { resolveExecutionIdentity } from '../../../shared/identity';
-import { resolveHandoffPrefill } from '../../session-handoff/utils/handoff';
+import { isHandoffDraftActive, planHandoffDraftOwnership, resolveHandoffPrefill } from '../../session-handoff/utils/handoff';
+import { clearHandoffDraft, readHandoffDraft, writeHandoffDraft } from '../../session-handoff/utils/handoffDraftStorage';
 import SessionLineageNotice from '../../session-handoff/view/SessionLineageNotice';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
@@ -178,6 +179,20 @@ function ChatInterface({
     sessionStore,
   });
 
+  // FT-M05 / FT-M05-R1: whether the OPEN session is right now an unsent
+  // handoff target. Computed before the composer hook so its
+  // `suppressSharedProjectDraft` flag can be passed in on the very same
+  // render the session becomes eligible — never one render late, which would
+  // let one keystroke slip into the project-wide draft first.
+  const selectedSessionId = selectedSession?.id ?? null;
+  const incomingHandoff = sessionLineage?.sessionId === selectedSessionId ? sessionLineage?.incoming ?? null : null;
+  const isHandoffDraftActiveForSession = isHandoffDraftActive({
+    lineage: sessionLineage,
+    sessionId: selectedSessionId,
+    hasMessages: chatMessages.length > 0,
+    isBusy: isProcessing || isLoadingSessionMessages,
+  });
+
   // Brand-new conversation: the composer allocated a stable session id via
   // the session gateway before the first send. Record it locally and put it
   // in the URL — this id never changes again, so there is no later handoff.
@@ -264,40 +279,56 @@ function ChatInterface({
     setPendingPermissionRequests,
     dismissedPermissionRequestIdsRef,
     resolvePermissionModeForProvider,
+    suppressSharedProjectDraft: isHandoffDraftActiveForSession,
   });
 
-  // FT-M05: a handoff target starts as a fresh run. Until its first send, its
-  // backend-persisted handoff package is placed in the composer once (never
-  // over text the user already typed) so the user reviews exactly what the
-  // new account/provider will receive.
-  const selectedSessionId = selectedSession?.id ?? null;
-  const incomingHandoff = sessionLineage?.sessionId === selectedSessionId ? sessionLineage?.incoming ?? null : null;
+  // FT-M05-R1: a handoff target's content is owned by that session alone
+  // (`handoff_draft_<sessionId>`), never by the project-wide draft it happens
+  // to share with its source — see `planHandoffDraftOwnership` for why a
+  // plain string-equality check (the previous approach) was not enough to
+  // stop an unsent package from resurfacing in the wrong session after a
+  // close/reopen. `trackedHandoffSessionRef` is this effect's only memory of
+  // "which session currently owns the shared composer input"; the plan
+  // itself is pure and fully covered by `handoff.test.ts`.
   const handoffPackageToPrefill = resolveHandoffPrefill({
     lineage: sessionLineage,
     sessionId: selectedSessionId,
     hasMessages: chatMessages.length > 0,
     isBusy: isProcessing || isLoadingSessionMessages,
   });
-  const prefilledHandoffRef = useRef<{ sessionId: string; handoffPackage: string } | null>(null);
+  const trackedHandoffSessionRef = useRef<string | null>(null);
   useEffect(() => {
-    const prefilled = prefilledHandoffRef.current;
-    if (prefilled && prefilled.sessionId !== selectedSessionId) {
-      // Composer drafts are per project, not per session: an unsent, untouched
-      // package must never follow the user into the source (or any other)
-      // session, where sending it would go to the wrong account.
-      if (input.trim() === prefilled.handoffPackage.trim()) {
-        setInput('');
-      }
-      prefilledHandoffRef.current = null;
+    const plan = planHandoffDraftOwnership(
+      { trackedSessionId: trackedHandoffSessionRef.current },
+      { sessionId: selectedSessionId, isActive: isHandoffDraftActiveForSession, input },
+      selectedSessionId ? readHandoffDraft(selectedSessionId) : null,
+      handoffPackageToPrefill,
+    );
+
+    if (plan.stashSessionId) {
+      writeHandoffDraft(plan.stashSessionId, plan.stashContent);
     }
-    if (!handoffPackageToPrefill || !selectedSessionId || prefilledHandoffRef.current?.sessionId === selectedSessionId) {
+    if (plan.consumeSessionId) {
+      clearHandoffDraft(plan.consumeSessionId);
+    }
+    trackedHandoffSessionRef.current = plan.trackedSessionId;
+    if (plan.resetInput) {
+      setInput('');
+    }
+    if (plan.loadInput !== null) {
+      setInput(plan.loadInput);
+    }
+  }, [isHandoffDraftActiveForSession, selectedSessionId, handoffPackageToPrefill, input, setInput]);
+
+  // Continuously mirrors the target's still-editable draft into its own
+  // session-scoped slot (not just on leave/consume), so closing the tab
+  // mid-edit — never triggering the effect above — does not lose it.
+  useEffect(() => {
+    if (!isHandoffDraftActiveForSession || !selectedSessionId) {
       return;
     }
-    prefilledHandoffRef.current = { sessionId: selectedSessionId, handoffPackage: handoffPackageToPrefill };
-    if (!input.trim()) {
-      setInput(handoffPackageToPrefill);
-    }
-  }, [handoffPackageToPrefill, selectedSessionId, input, setInput]);
+    writeHandoffDraft(selectedSessionId, input);
+  }, [isHandoffDraftActiveForSession, selectedSessionId, input]);
 
   const claudeProfileNamesById = useMemo(
     () => new Map(claudeProfiles.map((profile) => [profile.id, profile.displayName])),
