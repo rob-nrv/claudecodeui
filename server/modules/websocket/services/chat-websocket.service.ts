@@ -306,7 +306,7 @@ async function handleChatSend(
         nodeId: target.nodeId,
         nodeLabel: target.nodeLabel,
         appSessionId: sessionId,
-        projectPath: target.projectPath,
+        projectId: target.projectId,
         providerSessionId: session.provider_session_id,
         command,
         cwd: target.cwd,

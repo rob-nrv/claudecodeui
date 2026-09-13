@@ -497,6 +497,52 @@ const addHandoffRuntimeNodeColumns = (db: Database): void => {
   addColumnToTableIfNotExists(db, 'session_handoffs', columnNames, 'target_runtime_node_id', 'TEXT');
 };
 
+/**
+ * FT-M09: re-keys remote workspace mappings from the control plane's project
+ * path to the project id, so a project's identity no longer depends on where
+ * this machine keeps its own copy. Each FT-M08 row is carried over through the
+ * project that owns its path; a row whose project no longer exists names
+ * nothing and cannot be expressed by id, so it is dropped (and counted in the
+ * log). Runs once: a table that already has `project_id` is left alone.
+ */
+const rekeyRuntimeNodeWorkspacesByProjectId = (db: Database): void => {
+  const columnNames = getTableInfo(db, 'runtime_node_workspaces').map((column) => column.name);
+  if (columnNames.length === 0) {
+    db.exec(RUNTIME_NODE_WORKSPACES_TABLE_SCHEMA_SQL);
+    return;
+  }
+  if (columnNames.includes('project_id')) {
+    addColumnToTableIfNotExists(db, 'runtime_node_workspaces', columnNames, 'git_root_commits', 'TEXT');
+    return;
+  }
+
+  console.log('Running migration: Re-keying runtime_node_workspaces by project_id');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN TRANSACTION');
+    db.exec('DROP TABLE IF EXISTS runtime_node_workspaces__new');
+    db.exec(RUNTIME_NODE_WORKSPACES_TABLE_SCHEMA_SQL.replace('runtime_node_workspaces (', 'runtime_node_workspaces__new ('));
+    const before = (db.prepare('SELECT COUNT(*) AS count FROM runtime_node_workspaces').get() as { count: number }).count;
+    const carried = db.prepare(`
+      INSERT INTO runtime_node_workspaces__new (node_id, project_id, node_path, status, reason, verified_at, git_root_commits)
+      SELECT w.node_id, p.project_id, w.node_path, w.status, w.reason, w.verified_at, NULL
+      FROM runtime_node_workspaces w
+      JOIN projects p ON p.project_path = w.project_path
+    `).run().changes;
+    db.exec('DROP TABLE runtime_node_workspaces');
+    db.exec('ALTER TABLE runtime_node_workspaces__new RENAME TO runtime_node_workspaces');
+    db.exec('COMMIT');
+    if (before > carried) {
+      console.log(`Migration note: ${before - carried} workspace mapping(s) named a project that no longer exists and were not carried over`);
+    }
+  } catch (migrationError) {
+    db.exec('ROLLBACK');
+    throw migrationError;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+};
+
 const ensureProjectsForSessionPaths = (db: Database): void => {
   if (!tableExists(db, 'sessions')) {
     return;
@@ -575,6 +621,7 @@ export const runMigrations = (db: Database) => {
     addSessionRuntimeNodeIdColumn(db);
     addHandoffRuntimeNodeColumns(db);
     ensureProjectsForSessionPaths(db);
+    rekeyRuntimeNodeWorkspacesByProjectId(db);
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_provider_session_id ON sessions(provider_session_id)');

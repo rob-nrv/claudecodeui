@@ -1,6 +1,7 @@
 import { createPublicKey, randomUUID } from 'node:crypto';
 
 import type { EnrollmentRedemption } from '@/modules/database/index.js';
+import { normalizeRuntimeArch, normalizeRuntimePlatform } from '@/modules/runtime-nodes/runtime-node-availability.js';
 import type { FailureRateLimiter } from '@/shared/types.js';
 import {
   AppError,
@@ -13,7 +14,6 @@ import {
 const ENROLLMENT_CODE_TTL_MS = 15 * 60_000;
 const MAX_OUTSTANDING_ENROLLMENTS = 5;
 const MAX_LABEL_LENGTH = 64;
-const MAX_FACT_LENGTH = 32;
 const MAX_VERSION_LENGTH = 32;
 const MAX_PUBLIC_KEY_LENGTH = 1024;
 
@@ -139,8 +139,8 @@ export function createRuntimeNodeEnrollmentService(dependencies: {
       const redemption = dependencies.store.redeem(hashSecretValue(normalizedCode), now(), {
         nodeId: createNodeId(),
         label: sanitizeLabel(input.label) ?? 'Runtime node',
-        platform: sanitizeFact(input.platform, MAX_FACT_LENGTH),
-        arch: sanitizeFact(input.arch, MAX_FACT_LENGTH),
+        platform: normalizeRuntimePlatform(input.platform),
+        arch: normalizeRuntimeArch(input.arch),
         runtimeVersion: sanitizeFact(input.runtimeVersion, MAX_VERSION_LENGTH),
         publicKey,
       });

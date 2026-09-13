@@ -737,11 +737,26 @@ export type ClaudeLiveUsage = {
 // ---------------------------
 //----------------- RUNTIME NODE TYPES ------------
 /**
- * Capabilities a RuntimeNode can be probed for (FT-M07). Deliberately limited
- * to what the roadmap needs next: running Claude, git for handoff/worktrees,
- * workspace access, and background execution (FT-M09, not provable yet).
+ * Capabilities a RuntimeNode can be probed for (FT-M07, extended in FT-M09).
+ *
+ * - `node-runtime`: the Node process running CloudCLI there (version, platform,
+ *   architecture; an Android host is a descriptive fact, never a capability).
+ * - `claude-cli`: `claude --version` runs.
+ * - `claude-auth`: `claude auth status` reports a login (no model call).
+ * - `claude-headless`: a headless run actually completed on that node recently
+ *   (observed by its agent; never a synthetic provider call).
+ * - `git-cli`, `workspace-filesystem` (root readable, and on node agents a
+ *   real write proof), `background-execution` (only a device check can prove
+ *   it; an observed process suspension disproves it).
  */
-export type RuntimeNodeCapabilityId = 'claude-cli' | 'git-cli' | 'workspace-filesystem' | 'background-execution';
+export type RuntimeNodeCapabilityId =
+  | 'node-runtime'
+  | 'claude-cli'
+  | 'claude-auth'
+  | 'claude-headless'
+  | 'git-cli'
+  | 'workspace-filesystem'
+  | 'background-execution';
 
 /**
  * Evidence-backed capability status.
@@ -762,11 +777,11 @@ export type RuntimeNodeCapabilityStatus = 'available' | 'unavailable' | 'unsuppo
  */
 export type RuntimeNodeProbeOutcome =
   | { outcome: 'proven'; detail?: string | null }
-  | { outcome: 'failed'; reason: string }
-  | { outcome: 'not_supported'; reason: string }
-  | { outcome: 'not_probed'; reason: string };
+  | { outcome: 'failed'; reason: string; detail?: string | null }
+  | { outcome: 'not_supported'; reason: string; detail?: string | null }
+  | { outcome: 'not_probed'; reason: string; detail?: string | null };
 
-/** One capability as exposed by the runtime-nodes API. */
+/** One capability as persisted from a probe (FT-M07). */
 export type RuntimeNodeCapability = {
   id: RuntimeNodeCapabilityId;
   status: RuntimeNodeCapabilityStatus;
@@ -775,6 +790,42 @@ export type RuntimeNodeCapability = {
   /** Epoch milliseconds of the probe that established this entry; null when never probed. */
   probedAt: number | null;
 };
+
+/**
+ * How a capability can be established at all (FT-M09): by a bounded probe, by
+ * observing a real run the user started, or only by a person checking the
+ * device (for example that runs survive the screen being off).
+ */
+export type RuntimeNodeCapabilityVerification = 'probe' | 'observed_run' | 'device_check';
+
+/**
+ * One capability as exposed by the runtime-nodes API. `freshness` is derived at
+ * read time: local evidence is fresh inside the freshness window, remote
+ * evidence only when it was produced on the node's CURRENT link. Stale
+ * evidence is shown for context and never counts as proof.
+ */
+export type RuntimeNodeCapabilityView = RuntimeNodeCapability & {
+  verification: RuntimeNodeCapabilityVerification;
+  freshness: 'fresh' | 'stale' | null;
+};
+
+/**
+ * Resource Governor state a node agent reports with its probe answer (FT-M09).
+ * Unknown signals stay unknown; nothing is reported as healthy by default.
+ * `admission` is what the node would do with a new run at report time; the
+ * node re-checks at every run start.
+ */
+export type RuntimeNodeResourceReport = {
+  admission: 'accepting' | 'at_capacity' | 'restricted';
+  restriction: 'storage_low' | 'battery_low' | null;
+  activeRuns: number;
+  maxConcurrentRuns: number;
+  storage: { state: 'known'; freeBytes: number; minFreeBytes: number } | { state: 'unknown'; reason: string };
+  battery: { state: 'known'; percent: number; charging: boolean | null; minPercent: number | null } | { state: 'unknown'; reason: string };
+  thermal: { state: 'known'; celsius: number } | { state: 'unknown'; reason: string };
+};
+
+export type RuntimeNodeResourcesView = RuntimeNodeResourceReport & { observedAt: string };
 
 /**
  * Whether a node can take new executions right now, derived at read time from
@@ -848,7 +899,12 @@ export type RuntimeNodeView = {
   arch: string | null;
   runtimeVersion: string | null;
   availability: RuntimeNodeAvailability;
-  capabilities: RuntimeNodeCapability[];
+  capabilities: RuntimeNodeCapabilityView[];
+  /**
+   * Last Resource Governor report from a connected node agent; null for the
+   * local node (not governed) and whenever no report arrived on the current link.
+   */
+  resources: RuntimeNodeResourcesView | null;
   /**
    * Who produced the capability evidence: this server probing itself, or an
    * authenticated remote node answering a probe this server asked for. A
@@ -862,6 +918,46 @@ export type RuntimeNodeView = {
   enrollment: 'local' | 'active' | 'revoked' | 'unenrolled';
   /** Present only when the listing was asked about one project. */
   workspace?: RuntimeNodeWorkspaceView;
+};
+
+/**
+ * State of one project's LOCAL working copy on one RuntimeNode (FT-M09),
+ * inspected by the machine that owns the folder. Never carries a path or a
+ * file name. `identity` compares the repository's root commits with those the
+ * node recorded when the folder was mapped.
+ */
+export type ProjectWorkspaceStateView = {
+  state: 'clean' | 'dirty' | 'missing' | 'unavailable' | 'identity_mismatch' | 'diverged' | 'unmapped' | 'unknown';
+  reason: string | null;
+  identity: 'match' | 'mismatch' | 'unrecorded' | 'unknown';
+  inspectedAt: string | null;
+  git: {
+    rootIsFolder: boolean;
+    branch: string | null;
+    detached: boolean;
+    headCommit: string | null;
+    upstream: { ahead: number; behind: number } | null;
+  } | null;
+  changes: {
+    staged: number;
+    modified: number;
+    added: number;
+    deleted: number;
+    renamed: number;
+    untracked: number;
+    conflicted: number;
+    total: number;
+    truncated: boolean;
+  } | null;
+  sync: {
+    syncable: number;
+    localOnly: number;
+    secret: number;
+    userExcluded: number;
+    secretContent: number;
+    changesDigest: string | null;
+    digestReason: string | null;
+  } | null;
 };
 
 // ---------------------------
@@ -899,6 +995,8 @@ export type RuntimeNodeLinkServerFrame =
   }
   | { type: 'probe.request'; requestId: string }
   | { type: 'workspace.verify'; requestId: string; path: string }
+  /** FT-M09: read-only inspection of a folder the node confines to its own workspace root. */
+  | { type: 'workspace.inspect'; requestId: string; path: string }
   | {
     type: 'run.start';
     executionId: string;
@@ -943,7 +1041,13 @@ export type RuntimeNodeLinkNodeFrame =
     activeExecutions: Array<{ executionId: string; lastSeq: number }>;
   }
   | { type: 'heartbeat' }
-  | { type: 'probe.result'; requestId: string; outcomes: Record<string, RuntimeNodeProbeOutcome> }
+  | {
+    type: 'probe.result';
+    requestId: string;
+    outcomes: Record<string, RuntimeNodeProbeOutcome>;
+    /** FT-M09 Resource Governor report; validated field-by-field by runtime-nodes. */
+    resources?: RuntimeNodeResourceReport | null;
+  }
   | {
     type: 'workspace.result';
     requestId: string;
@@ -951,7 +1055,10 @@ export type RuntimeNodeLinkNodeFrame =
     reason: string | null;
     /** The folder as the node resolved it (real path inside its workspace root) when `ok`. */
     path: string | null;
+    /** FT-M09: root commits of the folder's Git history when it is a repository (identity, not a path). */
+    rootCommits?: string[];
   }
+  | { type: 'workspace.state'; requestId: string; ok: boolean; reason: string | null; observation: unknown }
   | { type: 'run.accepted'; executionId: string }
   | { type: 'run.rejected'; executionId: string; code: string }
   | { type: 'run.event'; executionId: string; seq: number; message: unknown }

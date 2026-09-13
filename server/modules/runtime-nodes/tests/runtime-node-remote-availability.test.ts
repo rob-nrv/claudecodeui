@@ -63,7 +63,15 @@ test('a node probe answer cannot add capabilities, skip sanitization or smuggle 
     'root-shell': { outcome: 'proven' },
     __proto__: { outcome: 'proven' },
   });
-  assert.deepEqual(Object.keys(outcomes).sort(), ['background-execution', 'claude-cli', 'git-cli', 'workspace-filesystem']);
+  assert.deepEqual(Object.keys(outcomes).sort(), [
+    'background-execution',
+    'claude-auth',
+    'claude-cli',
+    'claude-headless',
+    'git-cli',
+    'node-runtime',
+    'workspace-filesystem',
+  ]);
   assert.equal(outcomes['git-cli'].outcome, 'not_probed');
   assert.equal(outcomes['workspace-filesystem'].outcome, 'not_probed');
   assert.equal(outcomes['background-execution'].outcome, 'not_probed');
@@ -73,7 +81,7 @@ test('a node probe answer cannot add capabilities, skip sanitization or smuggle 
   assert.equal(parseRemoteProbeOutcomes(null)['claude-cli'].outcome, 'not_probed');
 });
 
-function node(nodeId: string, available: boolean, proven: RuntimeNodeCapability['id'][]): RuntimeNodeView {
+function node(nodeId: string, available: boolean, proven: RuntimeNodeCapability['id'][], freshness: 'fresh' | 'stale' = 'fresh'): RuntimeNodeView {
   return {
     nodeId,
     label: nodeId.toUpperCase(),
@@ -83,11 +91,23 @@ function node(nodeId: string, available: boolean, proven: RuntimeNodeCapability[
     arch: null,
     runtimeVersion: null,
     availability: { state: available ? 'available' : 'unavailable', reason: available ? 'link_connected' : 'link_offline', lastSeenAt: null, freshUntil: null },
-    capabilities: proven.map((id) => ({ id, status: 'available', detail: null, reason: null, probedAt: NOW })),
+    capabilities: proven.map((id) => ({ id, status: 'available', detail: null, reason: null, probedAt: NOW, verification: 'probe', freshness })),
+    resources: null,
     evidence: nodeId === 'pc' ? 'local_probe' : 'node_probe',
     enrollment: nodeId === 'pc' ? 'local' : 'active',
   };
 }
+
+test('only fresh evidence verifies: a stale proof and a device-only capability both need something else', () => {
+  const nodes = [node('pc', true, ['claude-cli']), node('nas', true, ['git-cli'], 'stale')];
+  const stale = planCapabilityCheck({ required: ['git-cli'], currentNodeId: 'pc', nodes });
+  assert.equal(stale.disposition, 'human_check', 'a stale "available" is not proof on any node');
+  assert.deepEqual(stale.candidates, []);
+
+  const background = planCapabilityCheck({ required: ['background-execution'], currentNodeId: 'pc', nodes });
+  assert.deepEqual(background.requiresDeviceCheck, ['background-execution']);
+  assert.equal(background.requiresExplicitAuthorization, false);
+});
 
 test('verification planning separates here, another runtime (explicit authorization) and human checks', () => {
   const nodes = [node('pc', true, ['claude-cli']), node('nas', true, ['claude-cli', 'git-cli']), node('laptop', false, ['git-cli'])];

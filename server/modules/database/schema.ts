@@ -301,21 +301,27 @@ CREATE TABLE IF NOT EXISTS runtime_node_enrollments (
 `;
 
 /**
- * Explicit project-to-folder mappings on remote RuntimeNodes (FT-M08).
- * `project_path` is the control plane's project key; `node_path` is the folder
- * as the node itself resolved it inside its own workspace root. A row exists
- * only after the node verified the folder; `status` records the last answer.
+ * Explicit project-to-folder mappings on remote RuntimeNodes (FT-M08), keyed by
+ * the GLOBAL project identity since FT-M09: `project_id`, never a path of the
+ * control plane. `node_path` is the folder as the node itself resolved it
+ * inside its own workspace root — a node-local path that is only ever sent
+ * back to that node. Two nodes map the same project to different folders.
+ * A row exists only after the node verified the folder; `status` records the
+ * last answer. `git_root_commits` is the repository identity the node reported
+ * at mapping time (comma-separated; NULL = not recorded, '' = no Git history).
  */
 export const RUNTIME_NODE_WORKSPACES_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS runtime_node_workspaces (
     node_id TEXT NOT NULL,
-    project_path TEXT NOT NULL,
+    project_id TEXT NOT NULL,
     node_path TEXT NOT NULL,
     status TEXT NOT NULL,
     reason TEXT,
     verified_at INTEGER NOT NULL,
-    PRIMARY KEY (node_id, project_path),
-    FOREIGN KEY (node_id) REFERENCES runtime_nodes(node_id) ON DELETE CASCADE
+    git_root_commits TEXT,
+    PRIMARY KEY (node_id, project_id),
+    FOREIGN KEY (node_id) REFERENCES runtime_nodes(node_id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
 );
 `;
 

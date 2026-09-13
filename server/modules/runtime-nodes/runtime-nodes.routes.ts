@@ -111,6 +111,18 @@ export function createRuntimeNodesRouter(
     }),
   );
 
+  // FT-M09: read-only state of the project's LOCAL working copy on that node, inspected by the node itself.
+  router.get(
+    '/:nodeId/workspaces/:projectId/state',
+    asyncHandler(async (req: Request, res: Response) => {
+      const workspace = await service.inspectProjectWorkspace(
+        parseNodeId(req.params.nodeId),
+        parseProjectId(req.params.projectId, true) as string,
+      );
+      res.json(createApiSuccessResponse({ workspace }));
+    }),
+  );
+
   router.delete('/:nodeId/workspaces/:projectId', (req: Request, res: Response) => {
     const removed = service.unmapWorkspace(parseNodeId(req.params.nodeId), parseProjectId(req.params.projectId, true) as string);
     res.json(createApiSuccessResponse({ removed }));

@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 
 import { WebSocket } from 'ws';
 
+import { normalizeRuntimeArch, normalizeRuntimePlatform } from '@/modules/runtime-nodes/runtime-node-availability.js';
 import type { RuntimeNodeLinkServerFrame } from '@/shared/types.js';
 import {
   AppError,
@@ -76,6 +77,8 @@ type RuntimeNodeLinkServiceDependencies = {
   maxSupersedesPerWindow?: number;
   conflictCooldownMs?: number;
   seenPersistIntervalMs?: number;
+  /** FT-M09: how often silent links are swept; 0 disables the timer (tests call `sweepStaleLinks`). */
+  sweepIntervalMs?: number;
 };
 
 function sanitizeFact(value: unknown, maxLength: number): string | null {
@@ -108,8 +111,8 @@ function parseHello(frame: Record<string, unknown>): LinkHello | null {
   return {
     protocolVersion: frame.protocolVersion,
     runtimeVersion: sanitizeFact(frame.runtimeVersion, 32),
-    platform: sanitizeFact(frame.platform, 32),
-    arch: sanitizeFact(frame.arch, 32),
+    platform: normalizeRuntimePlatform(frame.platform),
+    arch: normalizeRuntimeArch(frame.arch),
     activeExecutions,
   };
 }
@@ -129,6 +132,8 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
   const maxSupersedesPerWindow = dependencies.maxSupersedesPerWindow ?? 3;
   const conflictCooldownMs = dependencies.conflictCooldownMs ?? 60_000;
   const seenPersistIntervalMs = dependencies.seenPersistIntervalMs ?? 60_000;
+  const sweepIntervalMs = dependencies.sweepIntervalMs ?? 15_000;
+  let sweepTimer: NodeJS.Timeout | null = null;
 
   const links = new Map<string, LinkState>();
   const verifiedRequests = new WeakMap<object, string>();
@@ -223,6 +228,10 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
       }
 
       const at = now();
+      if (!sweepTimer && sweepIntervalMs > 0) {
+        sweepTimer = setInterval(() => service.sweepStaleLinks(), sweepIntervalMs);
+        sweepTimer.unref?.();
+      }
       const previous = links.get(nodeId);
       if (previous) {
         // Newest authenticated connection wins (reconnect after a half-open
@@ -381,6 +390,25 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
 
     hasIdentityConflict,
 
+    /**
+     * Terminates links that have been silent past the stale window (FT-M09).
+     * A half-open socket (a phone that lost its network) never emits `close`
+     * on its own; without this its runs would read "running" indefinitely.
+     * Terminating triggers the normal close path: runs get their bounded
+     * reconnect grace, then fail explicitly. Returns the node ids swept.
+     */
+    sweepStaleLinks(): string[] {
+      const at = now();
+      const swept: string[] = [];
+      for (const link of links.values()) {
+        if (at - link.lastFrameAt > staleAfterMs && link.socket.readyState === WebSocket.OPEN) {
+          swept.push(link.nodeId);
+          link.socket.terminate();
+        }
+      }
+      return swept;
+    },
+
     send(nodeId: string, frame: RuntimeNodeLinkServerFrame): boolean {
       const link = links.get(nodeId);
       return isLive(link) ? sendFrame(link, frame) : false;
@@ -392,7 +420,7 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
      */
     request(
       nodeId: string,
-      frame: { type: 'probe.request' | 'workspace.verify' | 'approval.resolve' | 'history.fetch' } & Record<string, unknown>,
+      frame: { type: 'probe.request' | 'workspace.verify' | 'workspace.inspect' | 'approval.resolve' | 'history.fetch' } & Record<string, unknown>,
       expectType: string,
       timeoutMs: number,
     ): Promise<Record<string, unknown>> {

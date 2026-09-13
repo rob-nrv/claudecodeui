@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  RUNTIME_NODE_CAPABILITY_IDS,
   RUNTIME_NODE_FRESHNESS_MS,
+  normalizeRuntimeArch,
+  normalizeRuntimePlatform,
+  parseRemoteResourceReport,
   parseStoredRuntimeNodeCapabilities,
   resolveRuntimeNodeAvailability,
   toRuntimeNodeCapability,
+  toRuntimeNodeCapabilityViews,
 } from '@/modules/runtime-nodes/runtime-node-availability.js';
 import type { RuntimeNodeCapability, RuntimeNodeCapabilityId, RuntimeNodeCapabilityStatus } from '@/shared/types.js';
 
@@ -101,12 +106,72 @@ test('a probe time far in the future is not trusted as fresh', () => {
 });
 
 test('stored capabilities round-trip a real probe result', () => {
-  const probed = allCapabilities('available');
+  const probed = RUNTIME_NODE_CAPABILITY_IDS.map((id) => capability(id, id === 'background-execution' ? 'unknown' : 'available'));
   assert.deepEqual(parseStoredRuntimeNodeCapabilities(JSON.stringify(probed)), probed);
 });
 
+test('a failed or unknown capability may carry a short evidence detail, still never a path or address', () => {
+  assert.deepEqual(
+    toRuntimeNodeCapability('background-execution', { outcome: 'failed', reason: 'process_suspension_observed', detail: 'suspended 45s about 2h ago' }, NOW),
+    { id: 'background-execution', status: 'unavailable', detail: 'suspended 45s about 2h ago', reason: 'process_suspension_observed', probedAt: NOW },
+  );
+  assert.equal(toRuntimeNodeCapability('claude-auth', { outcome: 'proven', detail: 'signed in as robin@example.com' }, NOW).detail, null);
+  assert.equal(toRuntimeNodeCapability('claude-auth', { outcome: 'not_probed', reason: 'x', detail: '/root/.claude' }, NOW).detail, null);
+});
+
+test('capability views: local evidence ages out of the freshness window; remote evidence counts only on the current link', () => {
+  const stored = [capability('claude-cli', 'available'), capability('background-execution', 'unknown')];
+
+  const local = toRuntimeNodeCapabilityViews(stored, { kind: 'local', now: NOW + 1_000 });
+  assert.deepEqual(local.map((view) => [view.id, view.freshness, view.verification]), [
+    ['claude-cli', 'fresh', 'probe'],
+    ['background-execution', null, 'device_check'],
+  ]);
+  assert.equal(toRuntimeNodeCapabilityViews(stored, { kind: 'local', now: NOW + RUNTIME_NODE_FRESHNESS_MS + 1 })[0].freshness, 'stale');
+
+  assert.equal(toRuntimeNodeCapabilityViews(stored, { kind: 'remote', connectedAt: NOW - 1 })[0].freshness, 'fresh');
+  assert.equal(toRuntimeNodeCapabilityViews(stored, { kind: 'remote', connectedAt: NOW + 1 })[0].freshness, 'stale', 'proved before the node reconnected');
+  assert.equal(toRuntimeNodeCapabilityViews(stored, { kind: 'remote', connectedAt: null })[0].freshness, 'stale', 'no live link');
+  assert.equal(toRuntimeNodeCapabilityViews([capability('claude-headless', 'available')], { kind: 'local', now: NOW })[0].verification, 'observed_run');
+});
+
+test('architecture and platform names normalize to one descriptive value, and nothing else', () => {
+  assert.deepEqual(['aarch64', 'arm64', 'ARM64', 'arm64-v8a'].map(normalizeRuntimeArch), ['arm64', 'arm64', 'arm64', 'arm64']);
+  assert.deepEqual(['x86_64', 'amd64', 'x64'].map(normalizeRuntimeArch), ['x64', 'x64', 'x64']);
+  assert.deepEqual(['armv7l', 'armv8l', 'i686'].map(normalizeRuntimeArch), ['arm', 'arm', 'ia32']);
+  assert.equal(normalizeRuntimeArch('riscv64'), 'riscv64');
+  assert.equal(normalizeRuntimeArch('<script>'), 'script');
+  assert.equal(normalizeRuntimeArch(42), null);
+  assert.deepEqual(['android', 'linux', 'Windows', 'macOS'].map(normalizeRuntimePlatform), ['android', 'linux', 'win32', 'darwin']);
+});
+
+test('a node resource report is reduced to known shapes; malformed signals become unknown, never healthy', () => {
+  const report = parseRemoteResourceReport({
+    admission: 'restricted',
+    restriction: 'storage_low',
+    activeRuns: 1,
+    maxConcurrentRuns: 2,
+    storage: { state: 'known', freeBytes: 1024, minFreeBytes: 2048, path: '/root/secret' },
+    battery: { state: 'known', percent: 150, charging: true, minPercent: null },
+    thermal: { state: 'known', celsius: 'hot' },
+    extra: 'ignored',
+  });
+  assert.deepEqual(report, {
+    admission: 'restricted',
+    restriction: 'storage_low',
+    activeRuns: 1,
+    maxConcurrentRuns: 2,
+    storage: { state: 'known', freeBytes: 1024, minFreeBytes: 2048 },
+    battery: { state: 'unknown', reason: 'not_reported' },
+    thermal: { state: 'unknown', reason: 'not_reported' },
+  });
+  assert.equal(parseRemoteResourceReport({ admission: 'accepting', activeRuns: -1, maxConcurrentRuns: 2 }), null);
+  assert.equal(parseRemoteResourceReport({ admission: 'restricted', activeRuns: 0, maxConcurrentRuns: 2 }), null, 'a restriction must say what it is');
+  assert.equal(parseRemoteResourceReport('fine'), null);
+});
+
 test('stored capabilities are untrusted: malformed data, unknown ids and unstamped claims all collapse to unknown', () => {
-  const unknownEverywhere = ['claude-cli', 'git-cli', 'workspace-filesystem', 'background-execution'].map((id) => ({
+  const unknownEverywhere = [...RUNTIME_NODE_CAPABILITY_IDS].map((id) => ({
     id,
     status: 'unknown',
     detail: null,

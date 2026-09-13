@@ -8,6 +8,11 @@ import {
   resolveNodeAgentHome,
   writeNodeAgentCredential,
 } from '@/modules/node-agent/node-agent-credential.store.js';
+import {
+  DEFAULT_RESOURCE_GOVERNOR_POLICY,
+  type ResourceGovernorPolicy,
+} from '@/modules/node-agent/node-agent-resource-governor.js';
+import { NODE_AGENT_RUN_JOURNAL_FILE, readNodeAgentRunJournalSummary } from '@/modules/node-agent/node-agent-run-journal.js';
 import { validateNodeWorkspaceRoot } from '@/modules/node-agent/node-agent-workspace.js';
 
 type NodeAgentCliDependencies = {
@@ -21,7 +26,50 @@ type NodeAgentCliDependencies = {
 
 type ParsedFlags = Record<string, string | boolean>;
 
-const VALUE_FLAGS = new Set(['server', 'code', 'label', 'state-dir', 'workspace-root']);
+const VALUE_FLAGS = new Set([
+  'server',
+  'code',
+  'label',
+  'state-dir',
+  'workspace-root',
+  'max-concurrent-runs',
+  'min-free-storage-mb',
+  'min-battery-percent',
+]);
+
+function parseIntegerFlag(value: string | boolean | undefined, name: string, min: number, max: number): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value) || Number(value) < min || Number(value) > max) {
+    return { ok: false, error: `--${name} must be a whole number from ${min} to ${max}.` };
+  }
+  return { ok: true, value: Number(value) };
+}
+
+/** Resource Governor policy from flags (FT-M09); invalid values are refused, never clamped silently. */
+export function parseResourcePolicyFlags(flags: Record<string, string | boolean>): { ok: true; policy: ResourceGovernorPolicy } | { ok: false; error: string } {
+  const concurrency = parseIntegerFlag(flags['max-concurrent-runs'], 'max-concurrent-runs', 1, 16);
+  const storage = parseIntegerFlag(flags['min-free-storage-mb'], 'min-free-storage-mb', 0, 1_048_576);
+  const battery = parseIntegerFlag(flags['min-battery-percent'], 'min-battery-percent', 0, 100);
+  for (const parsed of [concurrency, storage, battery]) {
+    if (!parsed.ok) {
+      return parsed;
+    }
+  }
+  const concurrencyValue = (concurrency as { value: number | undefined }).value;
+  const storageValue = (storage as { value: number | undefined }).value;
+  const batteryValue = (battery as { value: number | undefined }).value;
+  return {
+    ok: true,
+    policy: {
+      maxConcurrentRuns: concurrencyValue ?? DEFAULT_RESOURCE_GOVERNOR_POLICY.maxConcurrentRuns,
+      minFreeStorageBytes: storageValue === undefined ? DEFAULT_RESOURCE_GOVERNOR_POLICY.minFreeStorageBytes : storageValue * 1024 * 1024,
+      // 0 turns the battery floor off.
+      minBatteryPercent: batteryValue === undefined || batteryValue === 0 ? DEFAULT_RESOURCE_GOVERNOR_POLICY.minBatteryPercent : batteryValue,
+    },
+  };
+}
 
 function parseFlags(argumentsList: string[]): { flags: ParsedFlags; unknown: string[] } {
   const flags: ParsedFlags = {};
@@ -66,6 +114,12 @@ Options:
   --workspace-root <folder>   Only folders inside it can be used by runs (start; default WORKSPACES_ROOT or home)
   --state-dir <folder>        Agent state (default CLOUDCLI_NODE_AGENT_HOME or ~/.cloudcli/node-agent)
   --force                     Replace an existing enrollment (enroll)
+
+Resource governor (start):
+  --max-concurrent-runs <n>   Runs this node accepts at once (1-16, default 2)
+  --min-free-storage-mb <n>   Refuse new runs below this free space in the workspace root (default 512, 0 = off)
+  --min-battery-percent <n>   Refuse new runs below this battery level while not charging, when the
+                              battery can be read (default off). Unknown battery never blocks.
 `;
 
 /**
@@ -101,6 +155,11 @@ export async function runNodeAgentCli(argumentsList: string[], dependencies: Nod
     dependencies.log(`Control plane:  ${credential.serverOrigin}`);
     dependencies.log(`Enrolled at:    ${credential.enrolledAt}`);
     dependencies.log(`State:          ${stateDir}`);
+    const journal = await readNodeAgentRunJournalSummary(path.join(stateDir, NODE_AGENT_RUN_JOURNAL_FILE));
+    if (journal) {
+      dependencies.log(`Runs:           ${journal.unfinished} unfinished, ${journal.interrupted} interrupted by an agent stop`);
+      dependencies.log(`Last completed: ${journal.lastCompletedAt === null ? 'never' : new Date(journal.lastCompletedAt).toISOString()}`);
+    }
     return 0;
   }
 
@@ -184,6 +243,11 @@ export async function runNodeAgentCli(argumentsList: string[], dependencies: Nod
       dependencies.error(workspaceRoot.error);
       return 1;
     }
+    const resourcePolicy = parseResourcePolicyFlags(flags);
+    if (!resourcePolicy.ok) {
+      dependencies.error(resourcePolicy.error);
+      return 1;
+    }
 
     // The agent keeps its own database. Set before the runtime graph loads.
     dependencies.environment.DATABASE_PATH = path.join(stateDir, 'agent.db');
@@ -195,6 +259,8 @@ export async function runNodeAgentCli(argumentsList: string[], dependencies: Nod
       credential,
       linkUrl: server.linkUrl,
       workspaceRoot: workspaceRoot.path,
+      stateDir,
+      resourcePolicy: resourcePolicy.policy,
       runtimeVersion: dependencies.runtimeVersion,
       log: (message) => dependencies.log(`[node] ${message}`),
     });

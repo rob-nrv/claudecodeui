@@ -9,8 +9,16 @@ import { initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import type { NodeAgentCredential } from '@/modules/node-agent/node-agent-credential.store.js';
 import { createNodeAgentExecutor } from '@/modules/node-agent/node-agent-executor.service.js';
 import { createNodeAgentLinkClient, type NodeAgentLinkStop } from '@/modules/node-agent/node-agent-link.client.js';
+import {
+  createNodeResourceGovernor,
+  readNodeResourceSignals,
+  type ResourceGovernorPolicy,
+} from '@/modules/node-agent/node-agent-resource-governor.js';
+import { createNodeAgentRunJournal, NODE_AGENT_RUN_JOURNAL_FILE } from '@/modules/node-agent/node-agent-run-journal.js';
+import { createProcessSuspensionMonitor } from '@/modules/node-agent/node-agent-suspension-monitor.js';
+import { inspectWorkspaceFolder, readWorkspaceRootCommits } from '@/modules/project-workspaces/index.js';
 import { createProviderRuntimeService, sessionsService } from '@/modules/providers/index.js';
-import { probeLocalRuntimeCapabilities } from '@/modules/runtime-nodes/index.js';
+import { probeLocalRuntimeCapabilities, proveDirectoryWritable } from '@/modules/runtime-nodes/index.js';
 
 const MAX_TRANSCRIPT_PROJECT_DIRECTORIES = 20_000;
 
@@ -41,18 +49,40 @@ async function findTranscript(providerSessionId: string): Promise<string | null>
 }
 
 /**
- * Starts the agent: node-local database, provider runtime, executor and link.
- * Resolves when the link stops for good (revocation, refused credential or an
- * explicit stop).
+ * Starts the agent: node-local database, run journal, resource governor,
+ * provider runtime, executor and link. Resolves when the link stops for good
+ * (revocation, refused credential or an explicit stop).
  */
 export async function runNodeAgent(options: {
   credential: NodeAgentCredential;
   linkUrl: string;
   workspaceRoot: string;
+  stateDir: string;
+  resourcePolicy: ResourceGovernorPolicy;
   runtimeVersion: string | null;
   log(message: string): void;
 }): Promise<NodeAgentLinkStop> {
   await initializeDatabase();
+
+  const journal = createNodeAgentRunJournal({ file: path.join(options.stateDir, NODE_AGENT_RUN_JOURNAL_FILE), log: options.log });
+  const { interrupted } = await journal.load();
+  if (interrupted.length > 0) {
+    // Their Claude processes ended with the previous agent; nothing is resumed or re-run.
+    options.log(`${interrupted.length} run(s) were interrupted when this agent last stopped. They were not resumed or re-run; retry them from CloudCLI.`);
+  }
+
+  const suspensionMonitor = createProcessSuspensionMonitor();
+  suspensionMonitor.start();
+
+  const governor = createNodeResourceGovernor({
+    policy: options.resourcePolicy,
+    readSignals: () => readNodeResourceSignals(options.workspaceRoot),
+  });
+  options.log(
+    `Resource governor: at most ${options.resourcePolicy.maxConcurrentRuns} concurrent run(s)`
+    + `, storage floor ${Math.round(options.resourcePolicy.minFreeStorageBytes / (1024 * 1024))} MB`
+    + `, battery floor ${options.resourcePolicy.minBatteryPercent === null ? 'off' : `${options.resourcePolicy.minBatteryPercent}%`}.`,
+  );
 
   const providerSessionIds = new Map<string, string>();
   const runtime = createProviderRuntimeService({
@@ -65,7 +95,19 @@ export async function runNodeAgent(options: {
     workspaceRoot: options.workspaceRoot,
     log: options.log,
     send: (frame) => link?.send(frame) ?? false,
-    probe: async () => probeLocalRuntimeCapabilities({ workspacesRoot: options.workspaceRoot }),
+    governor,
+    journal,
+    inspectWorkspace: (folder) => inspectWorkspaceFolder(folder),
+    readRootCommits: (folder) => readWorkspaceRootCommits(folder),
+    probe: async () => probeLocalRuntimeCapabilities({
+      workspacesRoot: options.workspaceRoot,
+      proveWorkspaceWrite: proveDirectoryWritable,
+      observations: {
+        startedAt: suspensionMonitor.startedAt,
+        lastCompletedRunAt: () => journal.lastCompletedAt(),
+        lastSuspension: () => suspensionMonitor.lastSuspension(),
+      },
+    }),
     runtime: {
       run: (provider, command, runOptions, writer) => {
         const appSessionId = String(runOptions.sessionId);
@@ -135,5 +177,7 @@ export async function runNodeAgent(options: {
 
   const stop = await link.start();
   await executor.abortAll(`link stopped (${stop.reason})`);
+  suspensionMonitor.stop();
+  await journal.flush();
   return stop;
 }

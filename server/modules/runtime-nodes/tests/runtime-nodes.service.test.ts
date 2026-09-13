@@ -18,10 +18,13 @@ const NOW = Date.UTC(2026, 8, 13, 12, 0, 0);
 type ProbeResult = Record<RuntimeNodeCapabilityId, RuntimeNodeProbeOutcome>;
 
 const provenProbe = async (): Promise<ProbeResult> => ({
+  'node-runtime': { outcome: 'proven', detail: 'Node 22.12.0 linux x64' },
   'claude-cli': { outcome: 'proven', detail: '2.1.220 (Claude Code)' },
+  'claude-auth': { outcome: 'proven', detail: 'signed in' },
+  'claude-headless': { outcome: 'not_probed', reason: 'no_run_observer' },
   'git-cli': { outcome: 'proven', detail: 'git version 2.45.0' },
   'workspace-filesystem': { outcome: 'proven' },
-  'background-execution': { outcome: 'not_probed', reason: 'no_probe_available' },
+  'background-execution': { outcome: 'not_probed', reason: 'requires_device_verification' },
 });
 
 async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void> {
@@ -167,12 +170,16 @@ test('a node without a proven Claude CLI is degraded, and a platform name never 
     assert.deepEqual(
       Object.fromEntries(node.capabilities.map((capability) => [capability.id, capability.status])),
       {
+        'node-runtime': 'unknown',
         'claude-cli': 'unavailable',
+        'claude-auth': 'unknown',
+        'claude-headless': 'unknown',
         'git-cli': 'unavailable',
         'workspace-filesystem': 'available',
         'background-execution': 'unknown',
       },
     );
+    assert.equal(node.resources, null, 'the control plane\'s own node is not governed and claims no resource state');
   });
 });
 

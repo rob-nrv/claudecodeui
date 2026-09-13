@@ -1,24 +1,54 @@
 // Pure RuntimeNode evaluation shared by every node kind — the local machine
-// today, remote nodes later: how a probe outcome becomes a capability, and how
-// probe age plus proven capabilities become availability. No IO lives here, so
-// the rules stay deterministic and cannot drift between node kinds.
+// and remote nodes: how a probe outcome becomes a capability, how probe age
+// plus proven capabilities become availability, and how untrusted node
+// reports are reduced to known shapes. No IO lives here, so the rules stay
+// deterministic and cannot drift between node kinds.
 import type {
   RuntimeNodeAvailability,
   RuntimeNodeCapability,
   RuntimeNodeCapabilityId,
   RuntimeNodeCapabilityStatus,
+  RuntimeNodeCapabilityVerification,
+  RuntimeNodeCapabilityView,
   RuntimeNodeProbeOutcome,
+  RuntimeNodeResourceReport,
 } from '@/shared/types.js';
 
 /** Every capability a node reports, in display order. Consumed by the runtime-nodes service. */
 export const RUNTIME_NODE_CAPABILITY_IDS: readonly RuntimeNodeCapabilityId[] = [
+  'node-runtime',
   'claude-cli',
+  'claude-auth',
+  'claude-headless',
   'git-cli',
   'workspace-filesystem',
   'background-execution',
 ];
 
-/** Capabilities whose proof means the node can actually run a new execution. */
+/**
+ * How each capability can be established (FT-M09). Static per capability: a
+ * node can never declare that something it could not probe was verified.
+ */
+const CAPABILITY_VERIFICATION: Record<RuntimeNodeCapabilityId, RuntimeNodeCapabilityVerification> = {
+  'node-runtime': 'probe',
+  'claude-cli': 'probe',
+  'claude-auth': 'probe',
+  'claude-headless': 'observed_run',
+  'git-cli': 'probe',
+  'workspace-filesystem': 'probe',
+  'background-execution': 'device_check',
+};
+
+export function capabilityVerification(id: RuntimeNodeCapabilityId): RuntimeNodeCapabilityVerification {
+  return CAPABILITY_VERIFICATION[id];
+}
+
+/**
+ * Capabilities whose proof means the node can actually run a new execution.
+ * Deliberately only the CLI (FT-M07/FT-M08 semantics): readiness signals such
+ * as `claude-auth` are shown, but an inconclusive auth read never takes a
+ * working node offline.
+ */
 const EXECUTION_CAPABILITY_IDS: ReadonlySet<RuntimeNodeCapabilityId> = new Set(['claude-cli']);
 
 /** How long a completed probe vouches for a node before it reads as unavailable. */
@@ -39,14 +69,15 @@ const CAPABILITY_STATUSES: ReadonlySet<string> = new Set<RuntimeNodeCapabilitySt
 
 /**
  * Keeps a probe detail to one short, path-free line such as a CLI version.
- * Anything that looks like a path is dropped entirely rather than truncated.
+ * Anything that looks like a path or an address is dropped entirely rather
+ * than truncated.
  */
 function sanitizeDetail(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
   }
   const firstLine = value.split(/\r?\n/)[0]?.trim() ?? '';
-  if (!firstLine || firstLine.includes('/') || firstLine.includes('\\')) {
+  if (!firstLine || firstLine.includes('/') || firstLine.includes('\\') || firstLine.includes('@')) {
     return null;
   }
   return firstLine.replace(/[^\w .()+:-]/g, '').trim().slice(0, MAX_DETAIL_LENGTH) || null;
@@ -73,11 +104,11 @@ export function toRuntimeNodeCapability(
     case 'proven':
       return { id, status: 'available', detail: sanitizeDetail(outcome.detail), reason: null, probedAt };
     case 'failed':
-      return { id, status: 'unavailable', detail: null, reason: sanitizeReason(outcome.reason) ?? 'probe_failed', probedAt };
+      return { id, status: 'unavailable', detail: sanitizeDetail(outcome.detail), reason: sanitizeReason(outcome.reason) ?? 'probe_failed', probedAt };
     case 'not_supported':
-      return { id, status: 'unsupported', detail: null, reason: sanitizeReason(outcome.reason) ?? 'not_supported', probedAt };
+      return { id, status: 'unsupported', detail: sanitizeDetail(outcome.detail), reason: sanitizeReason(outcome.reason) ?? 'not_supported', probedAt };
     default:
-      return { id, status: 'unknown', detail: null, reason: sanitizeReason(outcome.reason) ?? 'not_probed', probedAt: null };
+      return { id, status: 'unknown', detail: sanitizeDetail(outcome.detail), reason: sanitizeReason(outcome.reason) ?? 'not_probed', probedAt: null };
   }
 }
 
@@ -119,7 +150,7 @@ export function parseStoredRuntimeNodeCapabilities(capabilitiesJson: string | nu
 
     const status = entry.status as RuntimeNodeCapabilityStatus;
     if (status === 'unknown') {
-      return { id, status, detail: null, reason: sanitizeReason(entry.reason) ?? 'not_probed', probedAt: null };
+      return { id, status, detail: sanitizeDetail(entry.detail), reason: sanitizeReason(entry.reason) ?? 'not_probed', probedAt: null };
     }
 
     const probedAt = typeof entry.probedAt === 'number' && Number.isFinite(entry.probedAt) ? entry.probedAt : null;
@@ -129,8 +160,84 @@ export function parseStoredRuntimeNodeCapabilities(capabilitiesJson: string | nu
 
     return status === 'available'
       ? { id, status, detail: sanitizeDetail(entry.detail), reason: null, probedAt }
-      : { id, status, detail: null, reason: sanitizeReason(entry.reason) ?? 'probe_failed', probedAt };
+      : { id, status, detail: sanitizeDetail(entry.detail), reason: sanitizeReason(entry.reason) ?? 'probe_failed', probedAt };
   });
+}
+
+/**
+ * Adds how each capability is verified and whether its evidence is still
+ * current (FT-M09). Local evidence is fresh inside the freshness window;
+ * remote evidence is fresh only when produced on the node's current link
+ * (`connectedAt` null means no live link, so nothing remote is fresh).
+ */
+export function toRuntimeNodeCapabilityViews(
+  capabilities: RuntimeNodeCapability[],
+  scope: { kind: 'local'; now: number; freshnessMs?: number } | { kind: 'remote'; connectedAt: number | null },
+): RuntimeNodeCapabilityView[] {
+  return capabilities.map((capability) => {
+    let freshness: RuntimeNodeCapabilityView['freshness'] = null;
+    if (capability.probedAt !== null) {
+      if (scope.kind === 'local') {
+        const age = scope.now - capability.probedAt;
+        freshness = age <= (scope.freshnessMs ?? RUNTIME_NODE_FRESHNESS_MS) && age >= -MAX_FUTURE_SKEW_MS ? 'fresh' : 'stale';
+      } else {
+        freshness = scope.connectedAt !== null && capability.probedAt >= scope.connectedAt ? 'fresh' : 'stale';
+      }
+    }
+    return { ...capability, verification: capabilityVerification(capability.id), freshness };
+  });
+}
+
+const ARCH_ALIASES: Record<string, string> = {
+  aarch64: 'arm64',
+  arm64: 'arm64',
+  armv8: 'arm64',
+  'arm64-v8a': 'arm64',
+  x86_64: 'x64',
+  amd64: 'x64',
+  x64: 'x64',
+  armv8l: 'arm',
+  armv7l: 'arm',
+  armv7: 'arm',
+  armhf: 'arm',
+  'armeabi-v7a': 'arm',
+  arm: 'arm',
+  i386: 'ia32',
+  i686: 'ia32',
+  x86: 'ia32',
+  ia32: 'ia32',
+};
+
+const PLATFORM_ALIASES: Record<string, string> = {
+  windows: 'win32',
+  win32: 'win32',
+  macos: 'darwin',
+  osx: 'darwin',
+  darwin: 'darwin',
+};
+
+function sanitizeFactToken(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  return value.trim().toLowerCase().replace(/[^a-z0-9_.+-]/g, '').slice(0, 32) || null;
+}
+
+/**
+ * One name per CPU architecture, whatever reported it: `uname -m` says
+ * `aarch64`, Node says `arm64`, Android ABIs say `arm64-v8a`. A descriptive
+ * fact only — it never implies a capability. Consumed by the link and
+ * enrollment services and local registration.
+ */
+export function normalizeRuntimeArch(value: unknown): string | null {
+  const token = sanitizeFactToken(value);
+  return token ? ARCH_ALIASES[token] ?? token : null;
+}
+
+/** Normalizes a reported platform name (`android` stays `android`); descriptive only. */
+export function normalizeRuntimePlatform(value: unknown): string | null {
+  const token = sanitizeFactToken(value);
+  return token ? PLATFORM_ALIASES[token] ?? token : null;
 }
 
 /** A remote link silent for longer than this no longer vouches for its node. */
@@ -199,24 +306,86 @@ export function parseRemoteProbeOutcomes(value: unknown): Record<RuntimeNodeCapa
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const outcomes = {} as Record<RuntimeNodeCapabilityId, RuntimeNodeProbeOutcome>;
   for (const id of RUNTIME_NODE_CAPABILITY_IDS) {
-    const entry = source[id];
+    const entry = Object.prototype.hasOwnProperty.call(source, id) ? source[id] : undefined;
     const record = entry && typeof entry === 'object' ? entry as Record<string, unknown> : null;
     const reason = typeof record?.reason === 'string' ? record.reason : 'not_reported';
+    const detail = typeof record?.detail === 'string' ? record.detail : null;
     switch (record?.outcome) {
       case 'proven':
-        outcomes[id] = { outcome: 'proven', detail: typeof record.detail === 'string' ? record.detail : null };
+        outcomes[id] = { outcome: 'proven', detail };
         break;
       case 'failed':
-        outcomes[id] = { outcome: 'failed', reason };
+        outcomes[id] = { outcome: 'failed', reason, detail };
         break;
       case 'not_supported':
-        outcomes[id] = { outcome: 'not_supported', reason };
+        outcomes[id] = { outcome: 'not_supported', reason, detail };
+        break;
+      case 'not_probed':
+        outcomes[id] = { outcome: 'not_probed', reason, detail };
         break;
       default:
         outcomes[id] = { outcome: 'not_probed', reason: 'not_reported' };
     }
   }
   return outcomes;
+}
+
+const MAX_RESOURCE_BYTES = 2 ** 53 - 1;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readInteger(value: unknown, min: number, max: number): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : null;
+}
+
+/**
+ * Reduces a node's Resource Governor report (FT-M09) to known shapes. Any
+ * malformed signal becomes `unknown` — never `known` with a default value —
+ * and a report without its admission fields is dropped entirely.
+ */
+export function parseRemoteResourceReport(value: unknown): RuntimeNodeResourceReport | null {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  const admission = ['accepting', 'at_capacity', 'restricted'].includes(String(record.admission)) ? record.admission as RuntimeNodeResourceReport['admission'] : null;
+  const activeRuns = readInteger(record.activeRuns, 0, 10_000);
+  const maxConcurrentRuns = readInteger(record.maxConcurrentRuns, 1, 10_000);
+  if (!admission || activeRuns === null || maxConcurrentRuns === null) {
+    return null;
+  }
+  const restriction = admission === 'restricted' && ['storage_low', 'battery_low'].includes(String(record.restriction))
+    ? record.restriction as 'storage_low' | 'battery_low'
+    : null;
+  if (admission === 'restricted' && !restriction) {
+    return null;
+  }
+
+  const unknown = (reasonValue: unknown) => ({ state: 'unknown' as const, reason: sanitizeReason(reasonValue) ?? 'not_reported' });
+
+  const storageRecord = readRecord(record.storage);
+  const freeBytes = readInteger(storageRecord?.freeBytes, 0, MAX_RESOURCE_BYTES);
+  const minFreeBytes = readInteger(storageRecord?.minFreeBytes, 0, MAX_RESOURCE_BYTES);
+  const storage = storageRecord?.state === 'known' && freeBytes !== null && minFreeBytes !== null
+    ? { state: 'known' as const, freeBytes, minFreeBytes }
+    : unknown(storageRecord?.reason);
+
+  const batteryRecord = readRecord(record.battery);
+  const percent = readInteger(batteryRecord?.percent, 0, 100);
+  const minPercent = batteryRecord?.minPercent === null ? null : readInteger(batteryRecord?.minPercent, 1, 100);
+  const battery = batteryRecord?.state === 'known' && percent !== null && (batteryRecord.minPercent === null || minPercent !== null)
+    ? { state: 'known' as const, percent, charging: typeof batteryRecord.charging === 'boolean' ? batteryRecord.charging : null, minPercent }
+    : unknown(batteryRecord?.reason);
+
+  const thermalRecord = readRecord(record.thermal);
+  const celsius = typeof thermalRecord?.celsius === 'number' && Number.isFinite(thermalRecord.celsius) && thermalRecord.celsius > -50 && thermalRecord.celsius < 200
+    ? Math.round(thermalRecord.celsius * 10) / 10
+    : null;
+  const thermal = thermalRecord?.state === 'known' && celsius !== null ? { state: 'known' as const, celsius } : unknown(thermalRecord?.reason);
+
+  return { admission, restriction, activeRuns, maxConcurrentRuns, storage, battery, thermal };
 }
 
 /**

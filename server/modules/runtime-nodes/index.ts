@@ -10,5 +10,6 @@ export type { SessionExecutionTarget } from '@/modules/runtime-nodes/runtime-nod
 export { default as runtimeNodesRoutes } from '@/modules/runtime-nodes/runtime-nodes.routes.js';
 // runtimeNodeLinkRoutes: mounted by server/index.ts as the public, code-authenticated enrollment endpoint.
 export { default as runtimeNodeLinkRoutes } from '@/modules/runtime-nodes/runtime-node-link.routes.js';
-// probeLocalRuntimeCapabilities: used by the node-agent module to answer probe requests about its own machine.
-export { probeLocalRuntimeCapabilities } from '@/modules/runtime-nodes/runtime-node-probes.js';
+// probeLocalRuntimeCapabilities / proveDirectoryWritable: used by the node-agent module to answer probe requests about its own machine.
+export { probeLocalRuntimeCapabilities, proveDirectoryWritable } from '@/modules/runtime-nodes/runtime-node-probes.js';
+export type { RuntimeNodeRunObservations } from '@/modules/runtime-nodes/runtime-node-probes.js';

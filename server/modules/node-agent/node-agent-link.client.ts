@@ -22,6 +22,13 @@ type LinkClientDependencies = {
   onDisconnected(): void;
   log(message: string): void;
   heartbeatMs?: number;
+  /**
+   * FT-M09: with no pong or frame from the control plane for this long, the
+   * link is treated as dead and re-dialled. A mobile network change can leave
+   * a socket half-open for minutes without it.
+   */
+  livenessTimeoutMs?: number;
+  now?: () => number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   /** Consecutive refused upgrades (401/403) before the agent gives up; clock skew and revocation both look like this. */
@@ -42,6 +49,8 @@ const IDENTITY_CONFLICT_WAIT_MS = 60_000;
  */
 export function createNodeAgentLinkClient(dependencies: LinkClientDependencies) {
   const heartbeatMs = dependencies.heartbeatMs ?? 20_000;
+  const livenessTimeoutMs = dependencies.livenessTimeoutMs ?? heartbeatMs * 3;
+  const now = dependencies.now ?? Date.now;
   const initialBackoffMs = dependencies.initialBackoffMs ?? 1_000;
   const maxBackoffMs = dependencies.maxBackoffMs ?? 30_000;
   const maxConsecutiveAuthFailures = dependencies.maxConsecutiveAuthFailures ?? 5;
@@ -106,6 +115,10 @@ export function createNodeAgentLinkClient(dependencies: LinkClientDependencies) 
     });
     socket = current;
     welcomed = false;
+    let lastHeardAt = now();
+    current.on('pong', () => {
+      lastHeardAt = now();
+    });
 
     current.on('unexpected-response', (_request, response) => {
       const status = response.statusCode ?? 0;
@@ -133,15 +146,29 @@ export function createNodeAgentLinkClient(dependencies: LinkClientDependencies) 
         arch: dependencies.arch,
         activeExecutions: dependencies.getActiveExecutions(),
       } satisfies RuntimeNodeLinkNodeFrame));
+      lastHeardAt = now();
       heartbeatTimer = setInterval(() => {
-        if (current.readyState === WebSocket.OPEN) {
-          current.send(JSON.stringify({ type: 'heartbeat' }));
+        if (current.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        if (now() - lastHeardAt > livenessTimeoutMs) {
+          // Half-open link: nothing came back. Drop it so runs get their bounded grace and the node re-dials.
+          dependencies.log('The control plane stopped answering. Reconnecting.');
+          current.terminate();
+          return;
+        }
+        current.send(JSON.stringify({ type: 'heartbeat' }));
+        try {
+          current.ping();
+        } catch {
+          // The next tick judges liveness again.
         }
       }, heartbeatMs);
       heartbeatTimer.unref?.();
     });
 
     current.on('message', (raw) => {
+      lastHeardAt = now();
       let frame: Record<string, unknown> | null = null;
       try {
         const parsed = JSON.parse(raw.toString());

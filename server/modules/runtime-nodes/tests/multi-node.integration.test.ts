@@ -140,7 +140,7 @@ async function startControlPlane(base: string) {
     reconnectGraceMs: 1_500,
     cancelTimeoutMs: 2_000,
     requestTimeoutMs: 4_000,
-    onWorkspaceRejected: (nodeId, projectPath) => database.runtimeNodeWorkspacesDb.markUnavailable(nodeId, projectPath, 'rejected_by_node', Date.now()),
+    onWorkspaceRejected: (nodeId, projectId) => database.runtimeNodeWorkspacesDb.markUnavailable(nodeId, projectId, 'rejected_by_node', Date.now()),
   });
   const nodes = createRuntimeNodesService({
     link,
@@ -237,6 +237,7 @@ async function startNode(label: string, base: string) {
   const { createNodeAgentExecutor } = await import('@/modules/node-agent/node-agent-executor.service.js');
   // eslint-disable-next-line boundaries/dependencies -- see above.
   const { createNodeAgentLinkClient } = await import('@/modules/node-agent/node-agent-link.client.js');
+  const { inspectWorkspaceFolder, readWorkspaceRootCommits } = await import('@/modules/project-workspaces/index.js');
 
   const workspaceRoot = path.join(base, `${label}-workspaces`);
   const projectFolder = path.join(workspaceRoot, 'app');
@@ -263,6 +264,8 @@ async function startNode(label: string, base: string) {
     history: history as never,
     workspaceRoot,
     graceMs: 1_200,
+    inspectWorkspace: (folder) => inspectWorkspaceFolder(folder),
+    readRootCommits: (folder) => readWorkspaceRootCommits(folder),
     probe: async () => PROVEN_PROBE,
     send: (frame) => client.send(frame),
   });
@@ -636,4 +639,22 @@ test('remote history is read from the owning node; revocation is terminal, immed
   laptop.reconnect();
   const stop = await Promise.race([laptop.done, sleep(4_000).then(() => ({ reason: 'still retrying' }))]);
   assert.deepEqual(stop, { reason: 'authentication_failed' }, 'a revoked credential never links again');
+});
+
+test('FT-M09: workspace state of the project on a node is inspected over the link by that node, path-free', { concurrency: false }, async () => {
+  const response = await fetch(`${cp.baseUrl}/api/runtime-nodes/${nas.credential.nodeId}/workspaces/${cp.projectId}/state`, {
+    headers: { Authorization: `Bearer ${cp.token}` },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  const { data } = JSON.parse(body) as { data: { workspace: { state: string; reason: string | null; identity: string } } };
+  // The NAS test folder is a plain folder: honestly unknown, never "clean".
+  assert.deepEqual([data.workspace.state, data.workspace.reason], ['unknown', 'not_git_repository']);
+  assert.equal(body.includes(nas.workspaceRoot) || body.includes(nas.workspaceRoot.replace(/\\/g, '/')), false, 'no node path reaches the browser');
+
+  const revoked = await fetch(`${cp.baseUrl}/api/runtime-nodes/${laptop.credential.nodeId}/workspaces/${cp.projectId}/state`, {
+    headers: { Authorization: `Bearer ${cp.token}` },
+  });
+  const revokedBody = await revoked.json() as { data: { workspace: { state: string; reason: string } } };
+  assert.deepEqual([revokedBody.data.workspace.state, revokedBody.data.workspace.reason], ['unavailable', 'node_revoked']);
 });

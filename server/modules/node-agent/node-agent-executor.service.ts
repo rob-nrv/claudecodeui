@@ -1,3 +1,5 @@
+import type { NodeResourceGovernor } from '@/modules/node-agent/node-agent-resource-governor.js';
+import type { NodeAgentRunJournal } from '@/modules/node-agent/node-agent-run-journal.js';
 import { resolveNodeWorkspacePath, type NodeWorkspaceResolution } from '@/modules/node-agent/node-agent-workspace.js';
 import type {
   FetchHistoryResult,
@@ -7,6 +9,7 @@ import type {
   ProviderRuntimeWriter,
   RuntimeNodeLinkNodeFrame,
   RuntimeNodeProbeOutcome,
+  RuntimeNodeResourceReport,
 } from '@/shared/types.js';
 
 const EXECUTION_ID_PATTERN = /^[0-9a-f-]{36}$/;
@@ -61,6 +64,14 @@ type NodeExecutorDependencies = {
   probe(): Promise<Record<string, RuntimeNodeProbeOutcome>>;
   send(frame: RuntimeNodeLinkNodeFrame): boolean;
   resolveWorkspace?: (workspaceRoot: string, requested: unknown) => Promise<NodeWorkspaceResolution>;
+  /** FT-M09 Resource Governor; without one the executor applies no resource limit (tests, legacy callers). */
+  governor?: NodeResourceGovernor | null;
+  /** FT-M09 persistent run journal: accepted execution ids survive an agent restart. */
+  journal?: Pick<NodeAgentRunJournal, 'has' | 'recordStarted' | 'recordFinished'> | null;
+  /** FT-M09 read-only inspection of a confined folder; the answer is re-validated by the control plane. */
+  inspectWorkspace?: (folder: string) => Promise<unknown>;
+  /** FT-M09 repository identity recorded when a folder is mapped. */
+  readRootCommits?: (folder: string) => Promise<string[]>;
   /** How long an execution survives a lost link, and how long finished frames are retained for resume. */
   graceMs?: number;
   maxRetainedFrames?: number;
@@ -79,22 +90,28 @@ function readBoundedString(value: unknown, maxLength: number): string | undefine
  * Executes what an authenticated control plane asks of this node (FT-M08).
  *
  * It re-validates everything it receives: an execution id is honoured at most
- * once, a session runs at most once at a time, the working folder must resolve
- * inside this node's own workspace root, and only whitelisted provider options
- * reach the runtime. When the link drops, runs keep going for a bounded grace;
- * if the control plane does not take them back, they are aborted here so no run
- * continues unobserved.
+ * once (also across agent restarts when a journal is present), a session runs
+ * at most once at a time, the Resource Governor may refuse a run with an
+ * explicit code, the working folder must resolve inside this node's own
+ * workspace root, and only whitelisted provider options reach the runtime.
+ * When the link drops, runs keep going for a bounded grace; if the control
+ * plane does not take them back, they are aborted here so no run continues
+ * unobserved.
  */
 export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) {
   const graceMs = dependencies.graceMs ?? 20_000;
   const maxRetainedFrames = dependencies.maxRetainedFrames ?? 2000;
   const resolveWorkspace = dependencies.resolveWorkspace ?? resolveNodeWorkspacePath;
   const log = dependencies.log ?? (() => undefined);
+  const governor = dependencies.governor ?? null;
+  const journal = dependencies.journal ?? null;
 
   const executions = new Map<string, Execution>();
   const executionIdBySession = new Map<string, string>();
   const rememberedExecutionIds = new Set<string>();
   const providerSessionIdBySession = new Map<string, string>();
+  /** Starts that were cancelled while still being admitted: they never run. */
+  const cancelledBeforeAccept = new Set<string>();
 
   const remember = (executionId: string) => {
     rememberedExecutionIds.add(executionId);
@@ -147,8 +164,8 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
     if (!executionId) {
       return;
     }
-    if (rememberedExecutionIds.has(executionId)) {
-      // A replayed or duplicated dispatch is never executed twice.
+    if (rememberedExecutionIds.has(executionId) || journal?.has(executionId)) {
+      // A replayed or duplicated dispatch is never executed twice, even after this agent restarted.
       reject(executionId, 'DUPLICATE_EXECUTION');
       return;
     }
@@ -172,15 +189,45 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
       reject(executionId, 'SESSION_BUSY');
       return;
     }
-
-    // Reserve the session before any await so two starts can never interleave.
-    executionIdBySession.set(appSessionId, executionId);
-    const workspace = await resolveWorkspace(dependencies.workspaceRoot, frame.cwd);
-    if (!workspace.ok) {
-      executionIdBySession.delete(appSessionId);
-      reject(executionId, 'WORKSPACE_UNAVAILABLE');
+    if (governor && executionIdBySession.size >= governor.policy.maxConcurrentRuns) {
+      reject(executionId, 'RESOURCE_CONCURRENCY_LIMIT');
       return;
     }
+
+    // Reserve the session (and a concurrency slot) before any await so two starts can never interleave.
+    executionIdBySession.set(appSessionId, executionId);
+    const release = (code: string) => {
+      if (executionIdBySession.get(appSessionId) === executionId) {
+        executionIdBySession.delete(appSessionId);
+      }
+      cancelledBeforeAccept.delete(executionId);
+      reject(executionId, code);
+    };
+
+    const workspace = await resolveWorkspace(dependencies.workspaceRoot, frame.cwd);
+    if (!workspace.ok) {
+      release('WORKSPACE_UNAVAILABLE');
+      return;
+    }
+    if (governor) {
+      let refusal: string | null;
+      try {
+        refusal = await governor.admitSignals(executionIdBySession.size - 1);
+      } catch {
+        // A signal that cannot be read is unknown, and unknown never blocks.
+        refusal = null;
+      }
+      if (refusal) {
+        log(`Run ${executionId} refused by the resource governor: ${refusal}`);
+        release(refusal);
+        return;
+      }
+    }
+    if (cancelledBeforeAccept.has(executionId)) {
+      release('CANCELLED');
+      return;
+    }
+    await journal?.recordStarted(executionId, appSessionId);
 
     const execution: Execution = {
       executionId,
@@ -274,12 +321,10 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
       if (executionIdBySession.get(appSessionId) === executionId) {
         executionIdBySession.delete(appSessionId);
       }
-      emit(execution, {
-        type: 'run.finished',
-        executionId,
-        outcome: execution.cancelRequested ? 'aborted' : execution.failed ? 'failed' : 'completed',
-      });
-      log(`Run ${executionId} finished`);
+      const outcome = execution.cancelRequested ? 'aborted' : execution.failed ? 'failed' : 'completed';
+      void journal?.recordFinished(executionId, outcome);
+      emit(execution, { type: 'run.finished', executionId, outcome });
+      log(`Run ${executionId} finished (${outcome})`);
       // Kept briefly so a control plane reconnecting right now still receives the end of the run.
       execution.retainTimer = setTimeout(() => dropExecution(execution), graceMs);
       execution.retainTimer.unref?.();
@@ -290,6 +335,11 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
     /** Executions a reconnecting node reports in its hello. */
     activeExecutions(): Array<{ executionId: string; lastSeq: number }> {
       return [...executions.values()].map((execution) => ({ executionId: execution.executionId, lastSeq: execution.seq }));
+    },
+
+    /** Runs holding a concurrency slot right now (admitting or running). */
+    activeRunCount(): number {
+      return executionIdBySession.size;
     },
 
     /** The link dropped: every live run gets a bounded grace, then is aborted here. */
@@ -351,16 +401,52 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
           } catch {
             outcomes = {};
           }
-          dependencies.send({ type: 'probe.result', requestId: frame.requestId, outcomes });
+          let resources: RuntimeNodeResourceReport | null = null;
+          try {
+            resources = governor ? await governor.report(executionIdBySession.size) : null;
+          } catch {
+            resources = null;
+          }
+          dependencies.send({ type: 'probe.result', requestId: frame.requestId, outcomes, resources });
           return;
         }
 
         case 'workspace.verify': {
           if (typeof frame.requestId !== 'string') return;
           const resolution = await resolveWorkspace(dependencies.workspaceRoot, frame.path);
-          dependencies.send(resolution.ok
-            ? { type: 'workspace.result', requestId: frame.requestId, ok: true, reason: null, path: resolution.path }
-            : { type: 'workspace.result', requestId: frame.requestId, ok: false, reason: resolution.reason, path: null });
+          if (!resolution.ok) {
+            dependencies.send({ type: 'workspace.result', requestId: frame.requestId, ok: false, reason: resolution.reason, path: null });
+            return;
+          }
+          let rootCommits: string[] = [];
+          try {
+            rootCommits = dependencies.readRootCommits ? await dependencies.readRootCommits(resolution.path) : [];
+          } catch {
+            rootCommits = [];
+          }
+          dependencies.send({ type: 'workspace.result', requestId: frame.requestId, ok: true, reason: null, path: resolution.path, rootCommits });
+          return;
+        }
+
+        case 'workspace.inspect': {
+          if (typeof frame.requestId !== 'string') return;
+          const resolution = await resolveWorkspace(dependencies.workspaceRoot, frame.path);
+          if (!resolution.ok || !dependencies.inspectWorkspace) {
+            dependencies.send({
+              type: 'workspace.state',
+              requestId: frame.requestId,
+              ok: false,
+              reason: resolution.ok ? 'inspection_unsupported' : resolution.reason,
+              observation: null,
+            });
+            return;
+          }
+          try {
+            const observation = await dependencies.inspectWorkspace(resolution.path);
+            dependencies.send({ type: 'workspace.state', requestId: frame.requestId, ok: true, reason: null, observation });
+          } catch {
+            dependencies.send({ type: 'workspace.state', requestId: frame.requestId, ok: false, reason: 'inspection_failed', observation: null });
+          }
           return;
         }
 
@@ -374,6 +460,10 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
           remember(frame.executionId);
           const execution = executions.get(frame.executionId);
           if (!execution || execution.finished) {
+            if (!execution && [...executionIdBySession.values()].includes(frame.executionId)) {
+              // The start is still being admitted: it will be refused instead of running.
+              cancelledBeforeAccept.add(frame.executionId);
+            }
             dependencies.send({ type: 'run.cancel_result', executionId: frame.executionId, aborted: false });
             return;
           }

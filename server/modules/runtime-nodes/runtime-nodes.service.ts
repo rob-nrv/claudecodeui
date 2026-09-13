@@ -18,12 +18,22 @@ import {
   notifyUserIfEnabled,
 } from '@/modules/notifications/index.js';
 import {
+  classifyWorkspaceState,
+  inspectWorkspaceFolder,
+  parseWorkspaceObservation,
+  type WorkspaceObservation,
+} from '@/modules/project-workspaces/index.js';
+import {
   RUNTIME_NODE_CAPABILITY_IDS,
+  normalizeRuntimeArch,
+  normalizeRuntimePlatform,
   parseRemoteProbeOutcomes,
+  parseRemoteResourceReport,
   parseStoredRuntimeNodeCapabilities,
   resolveRemoteRuntimeNodeAvailability,
   resolveRuntimeNodeAvailability,
   toRuntimeNodeCapability,
+  toRuntimeNodeCapabilityViews,
 } from '@/modules/runtime-nodes/runtime-node-availability.js';
 import { createRuntimeNodeEnrollmentService } from '@/modules/runtime-nodes/runtime-node-enrollment.service.js';
 import {
@@ -39,8 +49,11 @@ import {
 import { planCapabilityCheck } from '@/modules/runtime-nodes/runtime-node-verification.js';
 import type {
   FetchHistoryResult,
+  ProjectRepositoryRow,
+  ProjectWorkspaceStateView,
   RuntimeNodeCapabilityId,
   RuntimeNodeProbeOutcome,
+  RuntimeNodeResourcesView,
   RuntimeNodeView,
   RuntimeNodeWorkspaceView,
 } from '@/shared/types.js';
@@ -68,6 +81,8 @@ type RuntimeNodesServiceDependencies = {
   notifications?: NotificationPort;
   /** Whether the local project folder exists; injectable so tests never depend on real paths. */
   isDirectory?: (directory: string) => Promise<boolean>;
+  /** Read-only inspection of this machine's own copy of a project (FT-M09); injectable for tests. */
+  inspectLocalWorkspace?: (folder: string) => Promise<WorkspaceObservation>;
 };
 
 type RuntimeNodeListing = {
@@ -89,7 +104,7 @@ type SessionBinding = {
 /** Where one existing session's next run executes, or why it cannot run anywhere. */
 export type SessionExecutionTarget =
   | { kind: 'local' }
-  | { kind: 'remote'; nodeId: string; nodeLabel: string; cwd: string; projectPath: string }
+  | { kind: 'remote'; nodeId: string; nodeLabel: string; cwd: string; projectId: string }
   | { kind: 'refused'; code: string; message: string; alternatives: Array<{ nodeId: string; label: string }> };
 
 function toNodeLabel(hostname: string): string {
@@ -108,6 +123,11 @@ async function isExistingDirectory(directory: string): Promise<boolean> {
  * `dependencies` are injectable so tests can pin probe results, time, host
  * facts and the node link over a temporary database. Routes and other modules
  * use the default instance below.
+ *
+ * Project identity (FT-M09): a project is its `project_id`. The control plane's
+ * `projects.project_path` is only THIS machine's working copy (the local
+ * node's workspace); every remote node maps the same project id to its own
+ * local folder, verified by that node.
  */
 export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDependencies = {}) {
   const probeCapabilities = dependencies.probeCapabilities ?? (() => probeLocalRuntimeCapabilities());
@@ -116,8 +136,13 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
   const readHostFacts = dependencies.readHostFacts
     ?? ((): HostFacts => ({ hostname: os.hostname(), platform: process.platform, arch: process.arch }));
   const isDirectory = dependencies.isDirectory ?? isExistingDirectory;
+  const inspectLocalWorkspace = dependencies.inspectLocalWorkspace ?? ((folder: string) => inspectWorkspaceFolder(folder));
   let inFlightProbe: Promise<void> | null = null;
   const inFlightRemoteProbes = new Map<string, Promise<void>>();
+  /** Resource Governor reports, valid only for the link that produced them. */
+  const resourcesByNode = new Map<string, RuntimeNodeResourcesView>();
+  /** One workspace inspection per node and project at a time: repeated requests share it instead of spawning more Git. */
+  const inFlightInspections = new Map<string, Promise<ProjectWorkspaceStateView>>();
 
   const link = dependencies.link ?? createRuntimeNodeLinkService({
     getCredential: (nodeId) => runtimeNodeCredentialsDb.getByNodeId(nodeId),
@@ -131,8 +156,8 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
   const remoteExecution = dependencies.remoteExecution ?? createRuntimeNodeRemoteExecutionService({
     link,
     notifications: dependencies.notifications,
-    onWorkspaceRejected: (nodeId, projectPath) =>
-      runtimeNodeWorkspacesDb.markUnavailable(nodeId, projectPath, 'rejected_by_node', now()),
+    onWorkspaceRejected: (nodeId, projectId) =>
+      runtimeNodeWorkspacesDb.markUnavailable(nodeId, projectId, 'rejected_by_node', now()),
   });
   const enrollment = createRuntimeNodeEnrollmentService({ store: runtimeNodeEnrollmentsDb, now });
 
@@ -140,8 +165,8 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
     const facts = readHostFacts();
     return runtimeNodesDb.upsertLocal(createNodeId(), {
       label: toNodeLabel(facts.hostname),
-      platform: facts.platform,
-      arch: facts.arch,
+      platform: normalizeRuntimePlatform(facts.platform),
+      arch: normalizeRuntimeArch(facts.arch),
       runtimeVersion,
     });
   };
@@ -162,7 +187,8 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
         arch: record.arch,
         runtimeVersion: record.runtimeVersion,
         availability: resolveRuntimeNodeAvailability({ lastSeenAt: record.lastSeenAt, capabilities, now: at }),
-        capabilities,
+        capabilities: toRuntimeNodeCapabilityViews(capabilities, { kind: 'local', now: at }),
+        resources: null,
         evidence: 'local_probe',
         enrollment: 'local',
       };
@@ -178,6 +204,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       capabilities,
       now: at,
     });
+    const resources = linkInfo ? resourcesByNode.get(record.nodeId) ?? null : null;
     return {
       nodeId: record.nodeId,
       label: record.label,
@@ -187,7 +214,8 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       arch: record.arch,
       runtimeVersion: linkInfo?.runtimeVersion ?? record.runtimeVersion,
       availability,
-      capabilities,
+      capabilities: toRuntimeNodeCapabilityViews(capabilities, { kind: 'remote', connectedAt: linkInfo?.connectedAt ?? null }),
+      resources: resources && linkInfo && Date.parse(resources.observedAt) >= linkInfo.connectedAt ? resources : null,
       evidence: 'node_probe',
       enrollment: enrollmentState,
     };
@@ -254,10 +282,17 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
     }
     const probe = (async () => {
       try {
-        const outcomes = parseRemoteProbeOutcomes(await remoteExecution.probe(nodeId));
+        const answer = await remoteExecution.probe(nodeId);
+        const outcomes = parseRemoteProbeOutcomes(answer.outcomes);
         const probedAt = now();
         const capabilities = RUNTIME_NODE_CAPABILITY_IDS.map((id) => toRuntimeNodeCapability(id, outcomes[id], probedAt));
         runtimeNodesDb.recordProbe(nodeId, { lastSeenAt: probedAt, capabilitiesJson: JSON.stringify(capabilities) });
+        const resources = parseRemoteResourceReport(answer.resources);
+        if (resources) {
+          resourcesByNode.set(nodeId, { ...resources, observedAt: new Date(probedAt).toISOString() });
+        } else {
+          resourcesByNode.delete(nodeId);
+        }
       } catch (error) {
         console.warn(`[RuntimeNodes] Remote capability probe of ${nodeId} failed:`, error instanceof AppError ? error.code : 'error');
       }
@@ -270,14 +305,17 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
   link.onLinkOpened((nodeId) => {
     void probeRemoteNode(nodeId);
   });
+  link.onLinkClosed((nodeId) => {
+    resourcesByNode.delete(nodeId);
+  });
 
-  const describeWorkspace = async (view: RuntimeNodeView, projectPath: string): Promise<RuntimeNodeWorkspaceView> => {
+  const describeWorkspace = async (view: RuntimeNodeView, project: ProjectRepositoryRow): Promise<RuntimeNodeWorkspaceView> => {
     if (view.isLocal) {
-      return (await isDirectory(projectPath))
+      return (await isDirectory(project.project_path))
         ? { state: 'available', reason: null, verifiedAt: null }
         : { state: 'unavailable', reason: 'project_folder_missing', verifiedAt: null };
     }
-    const mapping = runtimeNodeWorkspacesDb.get(view.nodeId, projectPath);
+    const mapping = runtimeNodeWorkspacesDb.get(view.nodeId, project.project_id);
     if (!mapping) {
       return { state: 'unmapped', reason: null, verifiedAt: null };
     }
@@ -310,12 +348,92 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
     return { record, credential };
   };
 
-  const requireProjectPath = (projectId: string): string => {
-    const projectPath = projectsDb.getProjectPathById(projectId);
-    if (!projectPath) {
+  const requireProject = (projectId: string): ProjectRepositoryRow => {
+    const project = projectsDb.getProjectById(projectId);
+    if (!project) {
       throw new AppError('Project not found.', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
     }
-    return projectPath;
+    return project;
+  };
+
+  /** The project a session or run names by this machine's copy path; null when it is not a registered project. */
+  const projectIdForPath = (projectPath: string | null | undefined): string | null => {
+    const trimmed = projectPath?.trim() ?? '';
+    return trimmed ? projectsDb.getProjectPath(trimmed)?.project_id ?? null : null;
+  };
+
+  const workspaceState = (
+    state: ProjectWorkspaceStateView['state'],
+    reason: string | null,
+    inspectedAt: number | null = null,
+  ): ProjectWorkspaceStateView => ({
+    state,
+    reason,
+    identity: 'unknown',
+    inspectedAt: inspectedAt === null ? null : new Date(inspectedAt).toISOString(),
+    git: null,
+    changes: null,
+    sync: null,
+  });
+
+  const toWorkspaceStateView = (observation: WorkspaceObservation, expectedRootCommits: string[] | null, at: number): ProjectWorkspaceStateView => {
+    const classified = classifyWorkspaceState({ observation, expectedRootCommits });
+    const git = observation.git;
+    return {
+      state: classified.state,
+      reason: classified.reason,
+      identity: classified.identity,
+      inspectedAt: new Date(at).toISOString(),
+      git: git.state === 'repository'
+        ? { rootIsFolder: git.rootIsFolder, branch: git.branch, detached: git.detached, headCommit: git.headCommit, upstream: git.upstream }
+        : null,
+      changes: observation.changes,
+      sync: observation.sync,
+    };
+  };
+
+  const inspectProjectWorkspaceOnce = async (nodeId: string, projectId: string): Promise<ProjectWorkspaceStateView> => {
+    const project = requireProject(projectId);
+    const record = runtimeNodesDb.getById(nodeId);
+    if (!record) {
+      throw new AppError('Runtime node not found.', { code: 'RUNTIME_NODE_NOT_FOUND', statusCode: 404 });
+    }
+    if (record.isLocal) {
+      let observation: WorkspaceObservation;
+      try {
+        observation = await inspectLocalWorkspace(project.project_path);
+      } catch {
+        return workspaceState('unknown', 'inspection_failed', now());
+      }
+      return toWorkspaceStateView(observation, null, now());
+    }
+
+    const { credential } = requireRemoteNode(nodeId);
+    if (credential.status !== 'active') {
+      return workspaceState('unavailable', 'node_revoked');
+    }
+    const mapping = runtimeNodeWorkspacesDb.get(nodeId, project.project_id);
+    if (!mapping) {
+      return workspaceState('unmapped', null);
+    }
+    if (!link.isUsable(nodeId)) {
+      return workspaceState('unavailable', 'node_offline');
+    }
+    let answer: Awaited<ReturnType<RuntimeNodeRemoteExecutionService['inspectWorkspace']>>;
+    try {
+      answer = await remoteExecution.inspectWorkspace(nodeId, mapping.nodePath);
+    } catch (error) {
+      return workspaceState('unavailable', error instanceof AppError && error.code === 'RUNTIME_NODE_TIMEOUT' ? 'node_timeout' : 'node_offline');
+    }
+    const at = now();
+    if (!answer.ok) {
+      return workspaceState(answer.reason === 'folder_not_found' ? 'missing' : 'unavailable', answer.reason, at);
+    }
+    const observation = parseWorkspaceObservation(answer.observation);
+    if (!observation) {
+      return workspaceState('unknown', 'malformed_node_answer', at);
+    }
+    return toWorkspaceStateView(observation, mapping.gitRootCommits, at);
   };
 
   return {
@@ -341,7 +459,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
      * workspace is usable there. Consumed by the runtime-nodes routes.
      */
     async listNodes(options: { refresh?: boolean; projectId?: string } = {}): Promise<RuntimeNodeListing> {
-      const projectPath = options.projectId ? requireProjectPath(options.projectId) : null;
+      const project = options.projectId ? requireProject(options.projectId) : null;
       const local = getLocalNode();
       const shouldProbe = (lastSeenAt: number | null, connectedAt = 0): boolean => {
         const age = lastSeenAt === null ? Number.POSITIVE_INFINITY : now() - lastSeenAt;
@@ -371,9 +489,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       const at = now();
       const credentials = credentialsByNode();
       const nodes = runtimeNodesDb.list().map((record) => toView(record, at, credentials.get(record.nodeId) ?? null));
-      if (projectPath) {
+      if (project) {
         for (const node of nodes) {
-          node.workspace = await describeWorkspace(node, projectPath);
+          node.workspace = await describeWorkspace(node, project);
         }
       }
       return { localNodeId: local.nodeId, nodes };
@@ -458,7 +576,8 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
           statusCode: 409,
         });
       }
-      const mapping = runtimeNodeWorkspacesDb.get(nodeId, run.projectPath.trim());
+      const projectId = projectIdForPath(run.projectPath);
+      const mapping = projectId ? runtimeNodeWorkspacesDb.get(nodeId, projectId) : null;
       if (!mapping || mapping.status !== 'verified') {
         throw new AppError(`This project has no verified folder on "${node.label}".`, {
           code: 'RUNTIME_NODE_WORKSPACE_UNAVAILABLE',
@@ -506,12 +625,12 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       if (session.provider !== 'claude' || session.claude_profile_id) {
         return refused('RUNTIME_NODE_PROVIDER_UNSUPPORTED', `"${record.label}" cannot run this session's provider or account.`, bound);
       }
-      const projectPath = session.project_path?.trim() ?? '';
-      const mapping = projectPath ? runtimeNodeWorkspacesDb.get(bound, projectPath) : null;
-      if (!mapping || mapping.status !== 'verified') {
+      const projectId = projectIdForPath(session.project_path);
+      const mapping = projectId ? runtimeNodeWorkspacesDb.get(bound, projectId) : null;
+      if (!projectId || !mapping || mapping.status !== 'verified') {
         return refused('RUNTIME_NODE_WORKSPACE_UNAVAILABLE', `This project has no verified folder on "${record.label}".`, bound);
       }
-      return { kind: 'remote', nodeId: bound, nodeLabel: record.label, cwd: mapping.nodePath, projectPath };
+      return { kind: 'remote', nodeId: bound, nodeLabel: record.label, cwd: mapping.nodePath, projectId };
     },
 
     /** True when a session's binding names an enrolled remote node (its history lives there). */
@@ -536,7 +655,8 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
           statusCode: 409,
         });
       }
-      const mapping = runtimeNodeWorkspacesDb.get(record.nodeId, session.project_path?.trim() ?? '');
+      const projectId = projectIdForPath(session.project_path);
+      const mapping = projectId ? runtimeNodeWorkspacesDb.get(record.nodeId, projectId) : null;
       if (!mapping || !session.provider_session_id) {
         return { messages: [], total: 0, hasMore: false, offset: page.offset, limit: page.limit };
       }
@@ -556,8 +676,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
     },
 
     /**
-     * Maps a project to a folder on a remote node. The folder is verified by
-     * that node, inside its own workspace root; only its answer is stored.
+     * Maps a project (by id) to a folder on a remote node. The folder is
+     * verified by that node, inside its own workspace root; only its answer
+     * is stored, together with the repository identity it reported.
      */
     async mapWorkspace(input: { nodeId: string; projectId: string; path: unknown }): Promise<RuntimeNodeWorkspaceView> {
       const { record, credential } = requireRemoteNode(input.nodeId);
@@ -568,7 +689,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       if (!requestedPath || requestedPath.length > MAX_WORKSPACE_PATH_LENGTH || requestedPath.includes('\0')) {
         throw new AppError('path must be a folder path on the runtime node.', { code: 'RUNTIME_NODE_WORKSPACE_PATH_INVALID', statusCode: 400 });
       }
-      const projectPath = requireProjectPath(input.projectId);
+      const project = requireProject(input.projectId);
       if (!link.isUsable(record.nodeId)) {
         throw new AppError(`"${record.label}" is offline; the folder cannot be verified.`, { code: 'RUNTIME_NODE_OFFLINE', statusCode: 409 });
       }
@@ -583,18 +704,37 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       const verifiedAt = now();
       runtimeNodeWorkspacesDb.upsert({
         nodeId: record.nodeId,
-        projectPath,
+        projectId: project.project_id,
         nodePath: verification.path,
         status: 'verified',
         reason: null,
         verifiedAt,
+        gitRootCommits: verification.rootCommits,
       });
       return { state: 'mapped', reason: null, verifiedAt: new Date(verifiedAt).toISOString() };
     },
 
     unmapWorkspace(nodeId: string, projectId: string): boolean {
       requireRemoteNode(nodeId);
-      return runtimeNodeWorkspacesDb.delete(nodeId, requireProjectPath(projectId));
+      return runtimeNodeWorkspacesDb.delete(nodeId, requireProject(projectId).project_id);
+    },
+
+    /**
+     * State of a project's LOCAL working copy on one node (FT-M09), inspected
+     * read-only by the machine that owns the folder: this server for its own
+     * copy, the node itself for a mapped folder. Nothing is inferred from
+     * another node's copy or from this server's path; an unmapped, offline or
+     * unanswered node reads as such.
+     */
+    inspectProjectWorkspace(nodeId: string, projectId: string): Promise<ProjectWorkspaceStateView> {
+      const key = `${nodeId}\0${projectId}`;
+      const existing = inFlightInspections.get(key);
+      if (existing) {
+        return existing;
+      }
+      const inspection = inspectProjectWorkspaceOnce(nodeId, projectId).finally(() => inFlightInspections.delete(key));
+      inFlightInspections.set(key, inspection);
+      return inspection;
     },
 
     /** Revokes a remote node: terminal, closes its link and fails its runs at once. */

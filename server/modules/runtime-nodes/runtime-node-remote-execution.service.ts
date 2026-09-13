@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { isCommitHash } from '@/modules/project-workspaces/index.js';
 import type { RuntimeNodeLinkService } from '@/modules/runtime-nodes/runtime-node-link.service.js';
 import type {
   FetchHistoryResult,
@@ -55,7 +56,8 @@ type RemoteRunInput = {
   nodeId: string;
   nodeLabel: string;
   appSessionId: string;
-  projectPath: string;
+  /** Global project identity (FT-M09); the node only ever receives `cwd`, its own verified folder. */
+  projectId: string;
   providerSessionId: string | null;
   command: string;
   cwd: string;
@@ -94,6 +96,10 @@ const REJECTION_MESSAGES: Record<string, string> = {
   SESSION_BUSY: 'The runtime node is already running this session.',
   PROVIDER_UNSUPPORTED: 'The runtime node cannot run this provider.',
   INVALID_REQUEST: 'The runtime node refused the run request.',
+  CANCELLED: 'The run was cancelled before it started on the runtime node.',
+  RESOURCE_CONCURRENCY_LIMIT: 'The runtime node is already running as many sessions as it allows. The message was not sent, and it was not moved to another node.',
+  RESOURCE_STORAGE_LOW: 'The runtime node is low on free storage and refused new runs. The message was not sent, and it was not moved to another node.',
+  RESOURCE_BATTERY_LOW: 'The runtime node\'s battery is below its configured floor and it refused new runs. The message was not sent, and it was not moved to another node.',
 };
 
 function readString(value: unknown, maxLength: number): string | null {
@@ -128,7 +134,7 @@ function isFetchHistoryResult(value: unknown): value is FetchHistoryResult {
 export function createRuntimeNodeRemoteExecutionService(dependencies: {
   link: RuntimeNodeLinkService;
   notifications?: NotificationPort;
-  onWorkspaceRejected?(nodeId: string, projectPath: string): void;
+  onWorkspaceRejected?(nodeId: string, projectId: string): void;
   ackTimeoutMs?: number;
   reconnectGraceMs?: number;
   cancelTimeoutMs?: number;
@@ -263,7 +269,7 @@ export function createRuntimeNodeRemoteExecutionService(dependencies: {
         const code = sanitizeCode(frame.code);
         emitError(execution, REJECTION_MESSAGES[code] ?? REJECTION_MESSAGES.INVALID_REQUEST);
         if (code === 'WORKSPACE_UNAVAILABLE') {
-          dependencies.onWorkspaceRejected?.(nodeId, execution.input.projectPath);
+          dependencies.onWorkspaceRejected?.(nodeId, execution.input.projectId);
         }
         finish(execution, { outcome: 'rejected', code });
         return;
@@ -525,18 +531,33 @@ export function createRuntimeNodeRemoteExecutionService(dependencies: {
       }
     },
 
-    async probe(nodeId: string): Promise<unknown> {
+    /** Raw, untrusted probe answer: the runtime-nodes service reduces both parts to known shapes. */
+    async probe(nodeId: string): Promise<{ outcomes: unknown; resources: unknown }> {
       const answer = await link.request(nodeId, { type: 'probe.request' }, 'probe.result', 20_000);
-      return answer.outcomes;
+      return { outcomes: answer.outcomes, resources: answer.resources };
     },
 
-    async verifyWorkspace(nodeId: string, requestedPath: string): Promise<{ ok: boolean; reason: string | null; path: string | null }> {
+    async verifyWorkspace(nodeId: string, requestedPath: string): Promise<{ ok: boolean; reason: string | null; path: string | null; rootCommits: string[] }> {
       const answer = await link.request(nodeId, { type: 'workspace.verify', path: requestedPath }, 'workspace.result', requestTimeoutMs);
       const reason = typeof answer.reason === 'string' ? answer.reason.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 64) : null;
       const resolvedPath = readString(answer.path, 4096);
+      const rootCommits = Array.isArray(answer.rootCommits) ? [...new Set(answer.rootCommits.filter(isCommitHash))].sort().slice(0, 3) : [];
       return answer.ok === true && resolvedPath
-        ? { ok: true, reason: null, path: resolvedPath }
-        : { ok: false, reason: reason ?? 'workspace_rejected', path: null };
+        ? { ok: true, reason: null, path: resolvedPath, rootCommits }
+        : { ok: false, reason: reason ?? 'workspace_rejected', path: null, rootCommits: [] };
+    },
+
+    /**
+     * Asks a node to inspect a mapped folder read-only (FT-M09). The
+     * observation stays untrusted until the runtime-nodes service parses it.
+     */
+    async inspectWorkspace(nodeId: string, nodePath: string): Promise<{ ok: true; observation: unknown } | { ok: false; reason: string }> {
+      const answer = await link.request(nodeId, { type: 'workspace.inspect', path: nodePath }, 'workspace.state', Math.max(requestTimeoutMs, 45_000));
+      if (answer.ok === true) {
+        return { ok: true, observation: answer.observation };
+      }
+      const reason = typeof answer.reason === 'string' ? answer.reason.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 64) : '';
+      return { ok: false, reason: reason || 'workspace_rejected' };
     },
 
     async fetchHistory(nodeId: string, input: {
