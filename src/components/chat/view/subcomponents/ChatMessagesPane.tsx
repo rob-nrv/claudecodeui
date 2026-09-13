@@ -13,7 +13,7 @@ import type {
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
 import type { ClaudeProfile } from '../../../settings/hooks/useClaudeProfiles.types';
-import type { RuntimeNodesListing } from '../../../runtime-nodes/utils/runtimeNodes';
+import type { RuntimeNodePickerModel } from '../../../runtime-nodes/view/RuntimeNodePicker';
 
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
@@ -39,8 +39,8 @@ interface ChatMessagesPaneProps {
   claudeProfiles: ClaudeProfile[];
   selectedClaudeProfileId: string | null;
   onSelectClaudeProfile: (profileId: string) => void;
-  /** Backend RuntimeNode listing for the new-session target line (FT-M07). */
-  runtimeNodes: { listing: RuntimeNodesListing | null; loading: boolean; error: string | null };
+  /** Runtime targeting for the new-session surface (FT-M07/FT-M08). */
+  runtimeNodes: RuntimeNodePickerModel;
   textareaRef: RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;

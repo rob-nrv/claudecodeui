@@ -3,6 +3,32 @@ import { IS_PLATFORM } from "../shared/utils";
 export const AUTH_TOKEN_REFRESHED_EVENT = 'auth-token-refreshed';
 export const AUTH_SESSION_EXPIRED_EVENT = 'auth-session-expired';
 
+// How this page authenticates (FT-M08). `local`: the bearer token kept by this
+// client. `remote`: the page came through the Remote Gateway and the server
+// holds an HttpOnly session cookie — no token is ever stored, sent in a
+// header, or placed in a URL on that transport. Set by AuthContext from
+// /api/auth/status, which the server answers per listener.
+let authTransport = 'local';
+
+/** @param {'local' | 'remote'} transport */
+export const setAuthTransport = (transport) => {
+  authTransport = transport === 'remote' ? 'remote' : 'local';
+  if (authTransport === 'remote') {
+    localStorage.removeItem('auth-token');
+  }
+};
+
+export const usesCookieSession = () => authTransport === 'remote';
+
+// Whether this remote page currently holds a paired session. Before pairing,
+// a 401 is simply "not signed in" and must not read as an expired session.
+let remoteSessionActive = false;
+
+/** @param {boolean} active */
+export const setRemoteSessionActive = (active) => {
+  remoteSessionActive = Boolean(active);
+};
+
 // Only accept a refreshed token that has this app's issued JWT shape
 // (three base64url segments). An attacker-injected/malformed header value
 // must never overwrite the stored auth token.
@@ -71,6 +97,9 @@ export const expireAuthSession = () => {
 };
 
 export const getStoredAuthToken = () => {
+  if (usesCookieSession()) {
+    return null;
+  }
   const token = localStorage.getItem('auth-token');
   if (token && isAuthTokenExpired(token)) {
     expireAuthSession();
@@ -80,7 +109,7 @@ export const getStoredAuthToken = () => {
 };
 
 export const storeAuthToken = (token) => {
-  if (!isValidRefreshedToken(token)) {
+  if (usesCookieSession() || !isValidRefreshedToken(token)) {
     return false;
   }
 
@@ -117,7 +146,11 @@ export const authenticatedFetch = (url, options = {}) => {
     if (refreshedToken) {
       storeAuthToken(refreshedToken);
     }
-    if (response.headers.get('X-Auth-Error')) {
+    // Only a request that actually carried a credential can find it expired.
+    // Requests fired before sign-in (or before the page learned it is remote)
+    // are simply unauthenticated and must not announce an expired session.
+    const sentCredential = Boolean(token) || (usesCookieSession() && remoteSessionActive);
+    if (response.headers.get('X-Auth-Error') && sentCredential) {
       expireAuthSession();
     }
     return response;
@@ -372,11 +405,51 @@ export const api = {
       }),
   },
 
-  // RuntimeNode identity and probed availability (FT-M07). Read-only: nodes
-  // and their capabilities are reported by the server's own probes.
+  // RuntimeNode identity and probed availability (FT-M07), enrollment,
+  // revocation and project folder mappings (FT-M08). Capabilities are only
+  // ever reported by server-requested probes, never written by the browser.
   runtimeNodes: {
-    list: ({ refresh = false } = {}) =>
-      authenticatedFetch(`/api/runtime-nodes${refresh ? '?refresh=1' : ''}`),
+    /** @param {{ refresh?: boolean, projectId?: string | null }} [options] */
+    list: ({ refresh = false, projectId = null } = {}) => {
+      const params = new URLSearchParams();
+      if (refresh) params.set('refresh', '1');
+      if (projectId) params.set('projectId', projectId);
+      const query = params.toString();
+      return authenticatedFetch(`/api/runtime-nodes${query ? `?${query}` : ''}`);
+    },
+    createEnrollment: (label) =>
+      authenticatedFetch('/api/runtime-nodes/enrollments', {
+        method: 'POST',
+        body: JSON.stringify({ label }),
+      }),
+    revoke: (nodeId) =>
+      authenticatedFetch(`/api/runtime-nodes/${encodeURIComponent(nodeId)}/revoke`, { method: 'POST' }),
+    mapWorkspace: (nodeId, projectId, folderPath) =>
+      authenticatedFetch(`/api/runtime-nodes/${encodeURIComponent(nodeId)}/workspaces/${encodeURIComponent(projectId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ path: folderPath }),
+      }),
+    unmapWorkspace: (nodeId, projectId) =>
+      authenticatedFetch(`/api/runtime-nodes/${encodeURIComponent(nodeId)}/workspaces/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+      }),
+  },
+
+  // Remote access (FT-M08): pairing a browser through the Remote Gateway, the
+  // remote sessions list and revocation. Pairing returns no token — the
+  // server sets an HttpOnly cookie.
+  remoteAccess: {
+    pair: (username, password, pairingCode) => fetch('/api/remote-access/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, pairingCode }),
+    }),
+    logout: () => fetch('/api/remote-access/logout', { method: 'POST' }),
+    status: () => authenticatedFetch('/api/remote-access/status'),
+    createPairingCode: () => authenticatedFetch('/api/remote-access/pairing-codes', { method: 'POST' }),
+    revokeSession: (sessionId) =>
+      authenticatedFetch(`/api/remote-access/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
+    revokeAllSessions: () => authenticatedFetch('/api/remote-access/sessions/revoke-all', { method: 'POST' }),
   },
 
   // Claude live usage from Claude Code's statusLine (FT-M07). A null

@@ -54,9 +54,12 @@ export const useWebSocket = () => {
   return context;
 };
 
-const buildWebSocketUrl = (token: string | null) => {
+const buildWebSocketUrl = (token: string | null, usesCookieSession: boolean) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws`; // Platform mode: Use same domain as the page (goes through proxy)
+  // Remote Gateway (FT-M08): the browser sends its HttpOnly session cookie with
+  // the upgrade; a credential never goes into the URL on that transport.
+  if (usesCookieSession) return `${protocol}//${window.location.host}/ws`;
   if (!token) return null;
   if (isAuthTokenExpired(token)) {
     expireAuthSession();
@@ -78,7 +81,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const [latestMessage, setLatestMessage] = useState<ServerEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const { isLoading: isAuthLoading, token, user } = useAuth();
+  const { isLoading: isAuthLoading, token, user, transport } = useAuth();
 
   const dispatch = useCallback((event: ServerEvent) => {
     for (const listener of listenersRef.current) {
@@ -125,7 +128,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     if (!IS_PLATFORM && (isAuthLoading || !user)) return;
     try {
       // Construct WebSocket URL
-      const wsUrl = buildWebSocketUrl(token);
+      const wsUrl = buildWebSocketUrl(token, transport === 'remote');
 
       if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
 
@@ -173,7 +176,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     } catch (error) {
       console.error('Error creating WebSocket connection:', error);
     }
-  }, [dispatch, isAuthLoading, token, user]); // reconnect with current authentication state
+  }, [dispatch, isAuthLoading, token, transport, user]); // reconnect with current authentication state
 
   const sendMessage = useCallback((message: unknown) => {
     const socket = wsRef.current;

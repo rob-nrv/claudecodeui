@@ -68,6 +68,12 @@ interface UseChatComposerStateArgs {
    * session, whose binding lives on the session row.
    */
   runtimeNodeId?: string | null;
+  /**
+   * Why no new session may be created on the current runtime target (FT-M08),
+   * e.g. the chosen node is offline. Creation is refused with this message
+   * rather than sending the session anywhere else.
+   */
+  runtimeTargetBlockedReason?: string | null;
   permissionMode: PermissionMode | string;
   cyclePermissionMode: () => void;
   resolvePermissionModeForProvider: (provider: LLMProvider, requestedMode: PermissionMode | string) => PermissionMode;
@@ -289,6 +295,7 @@ export function useChatComposerState({
   provider,
   claudeProfileId,
   runtimeNodeId,
+  runtimeTargetBlockedReason,
   permissionMode,
   cyclePermissionMode,
   resolvePermissionModeForProvider,
@@ -924,6 +931,15 @@ export function useChatComposerState({
       // handoff later — this id stays valid for the conversation's lifetime.
       let targetSessionId = selectedSession?.id || currentSessionId || null;
       if (!targetSessionId) {
+        if (runtimeTargetBlockedReason) {
+          // The composer keeps the draft; nothing is created or sent anywhere else.
+          addMessage({
+            type: 'error',
+            content: runtimeTargetBlockedReason,
+            timestamp: new Date(),
+          });
+          return;
+        }
         let createdSessionName = sessionSummary;
         let boundClaudeProfileId: string | null = null;
         try {
@@ -1043,6 +1059,7 @@ export function useChatComposerState({
       currentSessionId,
       claudeProfileId,
       runtimeNodeId,
+      runtimeTargetBlockedReason,
       executeCommand,
       isLoading,
       onSessionProcessing,

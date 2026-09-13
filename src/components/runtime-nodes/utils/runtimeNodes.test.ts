@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   describeRuntimeNodeStatus,
+  needsRuntimePicker,
   resolveCreationTarget,
+  resolveRunTarget,
   type RuntimeNodeView,
   type RuntimeNodesListing,
 } from './runtimeNodes';
@@ -18,6 +20,17 @@ const node = (overrides: Partial<RuntimeNodeView> = {}): RuntimeNodeView => ({
   runtimeVersion: '1.37.2',
   availability: { state: 'available', reason: 'fresh_probe', lastSeenAt: null, freshUntil: null },
   capabilities: [],
+  ...overrides,
+});
+
+const remote = (overrides: Partial<RuntimeNodeView> = {}): RuntimeNodeView => node({
+  nodeId: 'nas',
+  label: 'NAS',
+  isLocal: false,
+  enrollment: 'active',
+  evidence: 'node_probe',
+  availability: { state: 'available', reason: 'link_connected', lastSeenAt: null, freshUntil: null },
+  workspace: { state: 'mapped', reason: null, verifiedAt: null },
   ...overrides,
 });
 
@@ -47,4 +60,42 @@ test('availability text follows backend truth and never upgrades a stale, degrad
     describeRuntimeNodeStatus(node({ availability: { state: 'unknown', reason: 'never_probed', lastSeenAt: null, freshUntil: null } })),
     { key: 'unknown', emphasis: 'muted' },
   );
+});
+
+test('remote link states read as offline, checking, conflict or revoked — never available', () => {
+  const status = (state: RuntimeNodeView['availability']['state'], reason: RuntimeNodeView['availability']['reason']) =>
+    describeRuntimeNodeStatus(remote({ availability: { state, reason, lastSeenAt: null, freshUntil: null } })).key;
+  assert.equal(status('unavailable', 'link_offline'), 'offline');
+  assert.equal(status('unavailable', 'link_stale'), 'offline');
+  assert.equal(status('degraded', 'probe_pending'), 'checking');
+  assert.equal(status('degraded', 'identity_conflict'), 'conflict');
+  assert.equal(status('degraded', 'protocol_incompatible'), 'incompatible');
+  assert.equal(status('unavailable', 'revoked'), 'revoked');
+  assert.equal(status('unknown', 'never_connected'), 'neverConnected');
+});
+
+test('one node stays lightweight; several nodes require a visible, explicit choice', () => {
+  const local = node();
+  assert.equal(needsRuntimePicker(listing([local])), false);
+  assert.equal(needsRuntimePicker(listing([local, remote({ enrollment: 'revoked', canExecute: false })])), false, 'revoked nodes are never offered');
+  assert.equal(needsRuntimePicker(listing([local, remote()])), true);
+
+  assert.deepEqual(resolveRunTarget(listing([local]), null, 'claude'), { nodeId: 'local-node', node: local, isRemote: false, implied: true, blocked: null });
+  assert.equal(resolveRunTarget(listing([local, remote()]), null, 'claude').blocked, 'choose_node');
+  assert.equal(resolveRunTarget(null, null, 'claude').blocked, null, 'unknown listing: the server applies its own rule');
+
+  const chosen = resolveRunTarget(listing([local, remote()]), 'nas', 'claude');
+  assert.deepEqual([chosen.nodeId, chosen.isRemote, chosen.implied, chosen.blocked], ['nas', true, false, null]);
+});
+
+test('a chosen node that cannot run now blocks creation instead of falling through to another node', () => {
+  const local = node();
+  const offline = remote({ canExecute: false, availability: { state: 'unavailable', reason: 'link_offline', lastSeenAt: null, freshUntil: null } });
+  const blocked = resolveRunTarget(listing([local, offline]), 'nas', 'claude');
+  assert.deepEqual([blocked.nodeId, blocked.blocked], ['nas', 'node_unavailable'], 'the local node is never substituted');
+
+  assert.equal(resolveRunTarget(listing([local, remote()]), 'gone', 'claude').blocked, 'node_missing');
+  assert.equal(resolveRunTarget(listing([local, remote()]), 'nas', 'codex').blocked, 'provider_unsupported');
+  assert.equal(resolveRunTarget(listing([local, remote({ workspace: { state: 'unmapped', reason: null, verifiedAt: null } })]), 'nas', 'claude').blocked, 'workspace_unmapped');
+  assert.equal(resolveRunTarget(listing([local, remote({ workspace: { state: 'unavailable', reason: 'rejected_by_node', verifiedAt: null } })]), 'nas', 'claude').blocked, 'workspace_unavailable');
 });

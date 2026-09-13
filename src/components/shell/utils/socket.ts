@@ -1,11 +1,12 @@
 import { IS_PLATFORM } from '../../../shared/utils';
-import { getStoredAuthToken } from '../../../utils/api';
+import { getStoredAuthToken, usesCookieSession } from '../../../utils/api';
 import type { ShellIncomingMessage, ShellOutgoingMessage } from '../types/types';
 
 export function getShellWebSocketUrl(): string | null {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-  if (IS_PLATFORM) {
+  // Remote Gateway sessions authenticate the upgrade with their HttpOnly cookie (FT-M08).
+  if (IS_PLATFORM || usesCookieSession()) {
     return `${protocol}//${window.location.host}/shell`;
   }
 

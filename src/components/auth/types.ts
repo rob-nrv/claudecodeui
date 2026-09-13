@@ -20,8 +20,20 @@ export type AuthSessionPayload = {
   message?: string;
 };
 
+/**
+ * Which listener served this page: `local` (bearer token kept by the client)
+ * or `remote` (Remote Gateway, HttpOnly cookie session only; FT-M08).
+ */
+export type AuthTransport = 'local' | 'remote';
+
 export type AuthStatusPayload = {
   needsSetup?: boolean;
+  transport?: AuthTransport;
+};
+
+export type RemotePairingPayload = {
+  data?: { user?: AuthUser; session?: { sessionId: string; expiresAt: string } };
+  error?: { code?: string; message?: string };
 };
 
 export type AuthUserPayload = {
@@ -40,11 +52,14 @@ export type ApiErrorPayload = {
 export type AuthContextValue = {
   user: AuthUser | null;
   token: string | null;
+  transport: AuthTransport;
   isLoading: boolean;
   needsSetup: boolean;
   hasCompletedOnboarding: boolean;
   error: string | null;
   login: (username: string, password: string) => Promise<AuthActionResult>;
+  /** Remote Gateway only: password + one-time pairing code issued from an already signed-in session. */
+  pairRemote: (username: string, password: string, pairingCode: string) => Promise<AuthActionResult>;
   register: (username: string, password: string) => Promise<AuthActionResult>;
   logout: () => void;
   refreshOnboardingStatus: () => Promise<void>;

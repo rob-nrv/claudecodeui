@@ -14,7 +14,13 @@ import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
 import { useRuntimeNodes } from '../../runtime-nodes/hooks/useRuntimeNodes';
-import { resolveCreationTarget } from '../../runtime-nodes/utils/runtimeNodes';
+import {
+  readRuntimeTargetChoice,
+  resolveRunTarget,
+  RUN_TARGET_BLOCK_DEFAULTS,
+  writeRuntimeTargetChoice,
+} from '../../runtime-nodes/utils/runtimeNodes';
+import type { RuntimeNodePickerModel } from '../../runtime-nodes/view/RuntimeNodePicker';
 import { resolveExecutionIdentity } from '../../../shared/identity';
 import { isHandoffDraftActive, planHandoffDraftOwnership, resolveHandoffPrefill } from '../../session-handoff/utils/handoff';
 import { clearHandoffDraft, readHandoffDraft, writeHandoffDraft } from '../../session-handoff/utils/handoffDraftStorage';
@@ -141,15 +147,43 @@ function ChatInterface({
     return selectedClaudeProfileId ?? defaultClaudeProfileId;
   }, [provider, claudeProfiles, selectedClaudeProfileId, defaultClaudeProfileId]);
 
-  // RuntimeNode for the NEXT brand-new session (FT-M07). Like the account
-  // above, it only feeds the one-time session-creation POST — an existing
-  // session's runtime binding lives on its row. Nothing is implied unless
-  // exactly one node can execute.
-  const runtimeNodes = useRuntimeNodes();
-  const creationRuntimeNodeId = useMemo(
-    () => resolveCreationTarget(runtimeNodes.listing)?.nodeId ?? null,
-    [runtimeNodes.listing],
+  // RuntimeNode for the NEXT brand-new session (FT-M07/FT-M08). Like the
+  // account above, it only feeds the one-time session-creation POST — an
+  // existing session's runtime binding lives on its row. Nothing is implied
+  // unless exactly one node can execute; a node the user chose stays chosen
+  // (per project) and blocks creation while it cannot run, instead of being
+  // replaced by another node.
+  const runtimeProjectId = selectedProject?.projectId ?? null;
+  const runtimeNodes = useRuntimeNodes(runtimeProjectId);
+  const [explicitRuntimeNodeId, setExplicitRuntimeNodeId] = useState<string | null>(() => readRuntimeTargetChoice(runtimeProjectId));
+  useEffect(() => {
+    setExplicitRuntimeNodeId(readRuntimeTargetChoice(runtimeProjectId));
+  }, [runtimeProjectId]);
+  const selectRuntimeNode = useCallback((nodeId: string) => {
+    setExplicitRuntimeNodeId(nodeId);
+    writeRuntimeTargetChoice(runtimeProjectId, nodeId);
+  }, [runtimeProjectId]);
+  const runtimeTarget = useMemo(
+    () => resolveRunTarget(runtimeNodes.listing, explicitRuntimeNodeId, provider),
+    [runtimeNodes.listing, explicitRuntimeNodeId, provider],
   );
+  const creationRuntimeNodeId = runtimeTarget.nodeId;
+  const runtimeTargetBlockedReason = runtimeTarget.blocked
+    ? t(`runtimeNode.blocked.${runtimeTarget.blocked}`, {
+      defaultValue: RUN_TARGET_BLOCK_DEFAULTS[runtimeTarget.blocked],
+      label: runtimeTarget.node?.label ?? '',
+    })
+    : null;
+  const runtimePickerModel = useMemo<RuntimeNodePickerModel>(() => ({
+    listing: runtimeNodes.listing,
+    loading: runtimeNodes.loading,
+    error: runtimeNodes.error,
+    target: runtimeTarget,
+    projectId: runtimeProjectId,
+    select: selectRuntimeNode,
+    refresh: runtimeNodes.refresh,
+    mapWorkspace: runtimeNodes.mapWorkspace,
+  }), [runtimeNodes.listing, runtimeNodes.loading, runtimeNodes.error, runtimeNodes.refresh, runtimeNodes.mapWorkspace, runtimeTarget, runtimeProjectId, selectRuntimeNode]);
 
   const {
     chatMessages,
@@ -275,8 +309,10 @@ function ChatInterface({
     selectedSession,
     currentSessionId,
     provider,
-    claudeProfileId: resolvedClaudeProfileId,
+    // A remote node runs with its own Claude login; a CloudCLI account never crosses machines.
+    claudeProfileId: runtimeTarget.isRemote ? null : resolvedClaudeProfileId,
     runtimeNodeId: creationRuntimeNodeId,
+    runtimeTargetBlockedReason,
     permissionMode,
     cyclePermissionMode,
     currentProviderModel,
@@ -512,7 +548,7 @@ function ChatInterface({
           claudeProfiles={claudeProfiles}
           selectedClaudeProfileId={resolvedClaudeProfileId}
           onSelectClaudeProfile={setSelectedClaudeProfileId}
-          runtimeNodes={runtimeNodes}
+          runtimeNodes={runtimePickerModel}
           provider={provider}
           setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
           textareaRef={textareaRef}

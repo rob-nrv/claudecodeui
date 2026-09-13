@@ -7,6 +7,8 @@ import {
   AUTH_TOKEN_REFRESHED_EVENT,
   getAuthTokenRefreshDelay,
   isValidRefreshedToken,
+  setAuthTransport,
+  setRemoteSessionActive,
   storeAuthToken,
 } from '../../../utils/api';
 import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
@@ -15,9 +17,11 @@ import type {
   AuthProviderProps,
   AuthSessionPayload,
   AuthStatusPayload,
+  AuthTransport,
   AuthUser,
   AuthUserPayload,
   OnboardingStatusPayload,
+  RemotePairingPayload,
 } from '../types';
 import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
 
@@ -50,6 +54,7 @@ export function useAuth(): AuthContextValue {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(() => readStoredToken());
+  const [transport, setTransport] = useState<AuthTransport>('local');
   const [isLoading, setIsLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
@@ -65,6 +70,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(null);
     setToken(null);
     clearStoredToken();
+    setRemoteSessionActive(false);
   }, []);
 
   const checkOnboardingStatus = useCallback(async () => {
@@ -163,6 +169,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const statusResponse = await api.auth.status();
       const statusPayload = await parseJsonSafely<AuthStatusPayload>(statusResponse);
 
+      // The server says which listener answered: through the Remote Gateway the
+      // session is an HttpOnly cookie the page never sees (FT-M08).
+      const isRemote = statusPayload?.transport === 'remote';
+      setTransport(isRemote ? 'remote' : 'local');
+      setAuthTransport(isRemote ? 'remote' : 'local');
+
       if (statusPayload?.needsSetup) {
         setNeedsSetup(true);
         return;
@@ -170,11 +182,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setNeedsSetup(false);
 
-      if (!token) {
+      if (!isRemote && !token) {
         return;
       }
 
-      const userResponse = await api.auth.user();
+      // A remote browser that has not paired yet simply has no session: probe
+      // the cookie with a plain request so a first visit never reads as an
+      // "expired session".
+      const userResponse = isRemote ? await fetch('/api/auth/user') : await api.auth.user();
       if (!userResponse.ok) {
         clearSession();
         return;
@@ -186,6 +201,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
 
+      setRemoteSessionActive(isRemote);
       setUser(userPayload.user);
       await checkOnboardingStatus();
     } catch (caughtError) {
@@ -269,6 +285,41 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [checkOnboardingStatus, setSession],
   );
 
+  /**
+   * Pairs this browser through the Remote Gateway (FT-M08). Success means the
+   * server set its HttpOnly session cookie; the response carries no token.
+   */
+  const pairRemote = useCallback<AuthContextValue['pairRemote']>(
+    async (username, password, pairingCode) => {
+      try {
+        setError(null);
+        const response = await api.remoteAccess.pair(username, password, pairingCode);
+        const payload = await parseJsonSafely<RemotePairingPayload>(response);
+        const pairedUser = payload?.data?.user;
+
+        if (!response.ok || !pairedUser) {
+          const message = payload?.error?.message ?? AUTH_ERROR_MESSAGES.pairingFailed;
+          setError(message);
+          return { success: false, error: message };
+        }
+
+        // Re-read the full user record over the new cookie session.
+        const userResponse = await api.auth.user();
+        const userPayload = userResponse.ok ? await parseJsonSafely<AuthUserPayload>(userResponse) : null;
+        setRemoteSessionActive(true);
+        setUser(userPayload?.user ?? pairedUser);
+        setNeedsSetup(false);
+        await checkOnboardingStatus();
+        return { success: true };
+      } catch (caughtError) {
+        console.error('Pairing error:', caughtError);
+        setError(AUTH_ERROR_MESSAGES.networkError);
+        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+      }
+    },
+    [checkOnboardingStatus],
+  );
+
   const register = useCallback<AuthContextValue['register']>(
     async (username, password) => {
       try {
@@ -296,20 +347,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   const logout = useCallback(() => {
-    // JWT logout is client-side: the server endpoint does not maintain a
-    // revocation list, so clearing the session is the complete operation.
+    if (transport === 'remote') {
+      // Remote sessions are server-side: revoke this one so the cookie is dead
+      // even if it was copied somewhere.
+      void api.remoteAccess.logout().catch((caughtError: unknown) => {
+        console.warn('[Auth] Remote logout failed:', caughtError);
+      });
+    }
+    // Local JWT logout is client-side: the server keeps no revocation list for
+    // bearer tokens, so clearing the session is the complete operation.
     clearSession();
-  }, [clearSession]);
+  }, [clearSession, transport]);
 
   const contextValue = useMemo<AuthContextValue>(
     () => ({
       user,
       token,
+      transport,
       isLoading,
       needsSetup,
       hasCompletedOnboarding,
       error,
       login,
+      pairRemote,
       register,
       logout,
       refreshOnboardingStatus,
@@ -322,10 +382,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       login,
       logout,
       needsSetup,
+      pairRemote,
       refreshOnboardingStatus,
       refreshUser,
       register,
       token,
+      transport,
       user,
     ],
   );

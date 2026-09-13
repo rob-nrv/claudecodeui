@@ -11,8 +11,7 @@ import type {
 } from "../../../../types/app";
 import type { ClaudeProfile } from "../../../settings/hooks/useClaudeProfiles.types";
 import LLMProviderLogo from "../../../llm-provider-logo/LLMProviderLogo";
-import type { RuntimeNodesListing } from "../../../runtime-nodes/utils/runtimeNodes";
-import RuntimeNodeTargetLine from "../../../runtime-nodes/view/RuntimeNodeTargetLine";
+import RuntimeNodePicker, { type RuntimeNodePickerModel } from "../../../runtime-nodes/view/RuntimeNodePicker";
 import { NextTaskBanner } from "../../../task-master";
 import {
   Dialog,
@@ -62,8 +61,8 @@ type ProviderSelectionEmptyStateProps = {
   claudeProfiles: ClaudeProfile[];
   selectedClaudeProfileId: string | null;
   onSelectClaudeProfile: (profileId: string) => void;
-  /** Backend RuntimeNode listing shown as the new session's target line (FT-M07). */
-  runtimeNodes: { listing: RuntimeNodesListing | null; loading: boolean; error: string | null };
+  /** Runtime targeting for the new session: a line with one node, an explicit choice with several (FT-M07/FT-M08). */
+  runtimeNodes: RuntimeNodePickerModel;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;
@@ -379,7 +378,8 @@ export default function ProviderSelectionEmptyState({
             </DialogContent>
           </Dialog>
 
-          {provider === "claude" && claudeProfiles.length >= 2 && (
+          {/* A remote node runs with its own Claude login; CloudCLI accounts stay on this server. */}
+          {provider === "claude" && claudeProfiles.length >= 2 && !runtimeNodes.target.isRemote && (
             <div
               role="group"
               aria-label={t("providerSelection.claudeAccount", { defaultValue: "Claude account" })}
@@ -410,12 +410,7 @@ export default function ProviderSelectionEmptyState({
             </div>
           )}
 
-          <RuntimeNodeTargetLine
-            listing={runtimeNodes.listing}
-            loading={runtimeNodes.loading}
-            error={runtimeNodes.error}
-            className="mx-auto mt-3 max-w-xs"
-          />
+          <RuntimeNodePicker model={runtimeNodes} className="mx-auto mt-3" />
 
           <p className="mt-4 text-center text-sm text-muted-foreground/70">
             {
