@@ -40,8 +40,9 @@ The browser only controls. A run executes only on the RuntimeNode its session wa
   - Every link connection carries a signed, timestamped, single-use header.
   - Browsers can never open a node link.
   - A revoked node is disconnected at once, and its runs stop.
-- **Capabilities come from probes.** They are recorded only from probes the control plane requests over the authenticated link, and only probes answered during the current connection count. Nothing a browser sends becomes a capability.
-- **Workspace folders are never assumed.** A project's folder on another node is never guessed. You map it explicitly, and the node verifies it inside its own `--workspace-root`. The node re-checks it at every run.
+- **Capabilities come from probes.** They are recorded only from probes the control plane requests over the authenticated link, and only probes answered during the current connection count. Nothing a browser sends becomes a capability. Settings > Remote access shows each node's evidence; see [android-runtime-node.md](android-runtime-node.md).
+- **Workspace folders are never assumed.** A project's folder on another node is never guessed. You map it explicitly, and the node verifies it inside its own `--workspace-root`. The node re-checks it at every run. Mappings belong to the project id, not to this machine's path ([portable-workspace-contract.md](portable-workspace-contract.md)).
+- **Links are kept honest.** Nodes ping their control plane and re-dial a silent link; the control plane terminates links silent for 60 s, so a run never reads "running" on a dead connection.
 - **Credentials never move.** A node runs Claude with its own login. CloudCLI's Claude accounts are never copied to other machines.
 
 ## 1. Enable the Remote Gateway
@@ -130,7 +131,8 @@ The first time you pick a remote node for a project, use **Map a folder on …**
 - Attachments cannot be sent to a remote node yet.
 - Files, Git and Shell show the control plane machine, not the remote node.
 - A remote session's history is read from its node. While the node is offline, that history is unavailable, and CloudCLI says so.
-- A project must exist on the control plane and be mapped on the node. CloudCLI never copies or syncs workspaces.
+- A project must exist on the control plane and be mapped on the node. CloudCLI never copies or syncs workspaces. The chosen node's copy is inspected read-only and shown under **Run on** (for example *No uncommitted changes · main*).
+- A node accepts at most `--max-concurrent-runs` runs (default 2) and refuses new runs below `--min-free-storage-mb` (default 512). Refusals are explicit and never move a run elsewhere.
 - A handoff to a remote node is only possible when no CloudCLI Claude accounts are configured (a handoff requires choosing an account).
 - Local, loopback-only browsing keeps its existing token behavior.
 
