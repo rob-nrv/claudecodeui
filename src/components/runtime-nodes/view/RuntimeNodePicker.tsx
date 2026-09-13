@@ -3,12 +3,15 @@ import type { FormEvent, KeyboardEvent } from 'react';
 import { Check, FolderInput, Loader2, RefreshCw, Server } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useProjectWorkspaceState } from '../hooks/useProjectWorkspaceState';
 import type { MapWorkspaceResult } from '../hooks/useRuntimeNodes';
 import {
   describeRuntimeNodeStatus,
+  describeWorkspaceState,
   needsRuntimePicker,
   RUN_TARGET_BLOCK_DEFAULTS,
   selectableRuntimeNodes,
+  WORKSPACE_STATE_DEFAULTS,
   type RunTargetResolution,
   type RuntimeNodeStatusDisplay,
   type RuntimeNodesListing,
@@ -64,6 +67,12 @@ export default function RuntimeNodePicker({ model, className = '' }: { model: Ru
 
   const nodes = selectableRuntimeNodes(model.listing);
   const { target } = model;
+  // FT-M09: the chosen remote node's own copy of this project, inspected by that node.
+  const workspaceState = useProjectWorkspaceState(
+    target.nodeId,
+    model.projectId,
+    needsRuntimePicker(model.listing) && target.isRemote && !target.blocked,
+  );
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     const keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
@@ -182,12 +191,34 @@ export default function RuntimeNodePicker({ model, className = '' }: { model: Ru
           {t(`runtimeNode.blocked.${target.blocked}`, { defaultValue: RUN_TARGET_BLOCK_DEFAULTS[target.blocked], label: targetLabel })}
         </p>
       ) : target.isRemote && target.node ? (
-        <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
-          {t('runtimeNode.remoteNote', {
-            defaultValue: 'Uses {{label}}’s own Claude login. Files, Git and Shell still show this server.',
-            label: targetLabel,
-          })}
-        </p>
+        <>
+          <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+            {t('runtimeNode.remoteNote', {
+              defaultValue: 'Uses {{label}}’s own Claude login. Files, Git and Shell still show this server.',
+              label: targetLabel,
+            })}
+          </p>
+          <p className="mt-1 text-center text-[11px] text-muted-foreground" aria-live="polite">
+            {t('runtimeNode.workspace.prefix', { defaultValue: 'Folder on {{label}}:', label: targetLabel })}{' '}
+            {workspaceState.loading ? (
+              t('runtimeNode.workspace.checking', { defaultValue: 'checking…' })
+            ) : workspaceState.workspace ? (() => {
+              const display = describeWorkspaceState(workspaceState.workspace);
+              const branch = workspaceState.workspace.git?.branch;
+              return (
+                <span className={EMPHASIS_CLASS[display.emphasis]}>
+                  {t(`runtimeNode.workspace.state.${display.key}`, {
+                    defaultValue: WORKSPACE_STATE_DEFAULTS[display.key],
+                    count: workspaceState.workspace.changes?.total ?? 0,
+                  })}
+                  {branch ? ` · ${branch}` : ''}
+                </span>
+              );
+            })() : (
+              t('runtimeNode.workspace.unreadable', { defaultValue: 'state could not be read' })
+            )}
+          </p>
+        </>
       ) : null}
 
       {canMapFolder && mappingNodeId !== target.nodeId && (

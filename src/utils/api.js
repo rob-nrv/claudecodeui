@@ -429,6 +429,9 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ path: folderPath }),
       }),
+    // FT-M09: read-only state of the project's local working copy on that node.
+    workspaceState: (nodeId, projectId) =>
+      authenticatedFetch(`/api/runtime-nodes/${encodeURIComponent(nodeId)}/workspaces/${encodeURIComponent(projectId)}/state`),
     unmapWorkspace: (nodeId, projectId) =>
       authenticatedFetch(`/api/runtime-nodes/${encodeURIComponent(nodeId)}/workspaces/${encodeURIComponent(projectId)}`, {
         method: 'DELETE',

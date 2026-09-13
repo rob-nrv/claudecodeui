@@ -4,7 +4,17 @@ import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../shared/view/ui';
 import { useRuntimeNodes } from '../../runtime-nodes/hooks/useRuntimeNodes';
-import { describeRuntimeNodeStatus, type RuntimeNodeStatusDisplay } from '../../runtime-nodes/utils/runtimeNodes';
+import {
+  CAPABILITY_EVIDENCE_DEFAULTS,
+  CAPABILITY_LABEL_DEFAULTS,
+  describeCapabilityEvidence,
+  describeResources,
+  describeRuntimeNodeStatus,
+  formatEvidenceReason,
+  RESOURCES_DEFAULTS,
+  type RuntimeNodeStatusDisplay,
+  type RuntimeNodeView,
+} from '../../runtime-nodes/utils/runtimeNodes';
 import SettingsCard from '../../settings/view/SettingsCard';
 import SettingsRow from '../../settings/view/SettingsRow';
 import SettingsSection from '../../settings/view/SettingsSection';
@@ -49,6 +59,69 @@ const NODE_STATUS_DEFAULTS: Record<RuntimeNodeStatusDisplay['key'], string> = {
 };
 
 const formatTime = (value: string) => new Date(value).toLocaleString();
+
+const formatBytes = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`);
+
+/**
+ * What a node has actually proved, expandable under its row (FT-M09): each
+ * capability with its evidence state, freshness and short detail, plus the
+ * node's Resource Governor report. Unknown stays unknown.
+ */
+function NodeEvidence({ node }: { node: RuntimeNodeView }) {
+  const { t } = useTranslation('settings');
+  const resources = node.resources ?? null;
+  return (
+    <details className="px-4 pb-3 text-xs">
+      <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
+        {t('remoteAccess.nodes.evidence.title', { defaultValue: 'What this node has proved' })}
+      </summary>
+      <ul className="mt-2 space-y-1">
+        {node.capabilities.map((capability) => {
+          const display = describeCapabilityEvidence(capability);
+          const note = capability.detail ?? formatEvidenceReason(capability.reason);
+          return (
+            <li key={capability.id} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-medium text-foreground">
+                {t(`remoteAccess.nodes.evidence.capability.${capability.id}`, { defaultValue: CAPABILITY_LABEL_DEFAULTS[capability.id] })}
+              </span>
+              <span className={EMPHASIS_CLASS[display.emphasis]}>
+                {t(`remoteAccess.nodes.evidence.state.${display.key}`, { defaultValue: CAPABILITY_EVIDENCE_DEFAULTS[display.key] })}
+              </span>
+              {note && <span className="text-muted-foreground">{note}</span>}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-muted-foreground">
+        {resources ? (
+          <>
+            <span className={EMPHASIS_CLASS[describeResources(resources).emphasis]}>
+              {t(`remoteAccess.nodes.evidence.resources.${describeResources(resources).key}`, {
+                defaultValue: RESOURCES_DEFAULTS[describeResources(resources).key],
+                active: resources.activeRuns,
+                max: resources.maxConcurrentRuns,
+              })}
+            </span>
+            {' · '}
+            {resources.storage.state === 'known'
+              ? t('remoteAccess.nodes.evidence.storage', { defaultValue: '{{free}} free', free: formatBytes(resources.storage.freeBytes) })
+              : t('remoteAccess.nodes.evidence.storageUnknown', { defaultValue: 'storage unknown' })}
+            {' · '}
+            {resources.battery.state === 'known'
+              ? t('remoteAccess.nodes.evidence.battery', {
+                defaultValue: 'battery {{percent}}%{{charging}}',
+                percent: resources.battery.percent,
+                charging: resources.battery.charging ? ' (charging)' : '',
+              })
+              : t('remoteAccess.nodes.evidence.batteryUnknown', { defaultValue: 'battery unknown' })}
+          </>
+        ) : (
+          t('remoteAccess.nodes.evidence.noResources', { defaultValue: 'No resource report on the current connection.' })
+        )}
+      </p>
+    </details>
+  );
+}
 
 /**
  * Settings > Remote access (FT-M08): whether the remote gateway listens, pairing
@@ -217,22 +290,24 @@ export default function RemoteAccessSettingsTab() {
           {remoteNodes.map((node) => {
             const display = describeRuntimeNodeStatus(node);
             return (
-              <SettingsRow
-                key={node.nodeId}
-                label={node.label}
-                description={[node.platform, node.arch, node.runtimeVersion].filter(Boolean).join(' · ') || undefined}
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`text-sm ${EMPHASIS_CLASS[display.emphasis]}`}>
-                    {t(`remoteAccess.nodes.status.${display.key}`, { defaultValue: NODE_STATUS_DEFAULTS[display.key] })}
-                  </span>
-                  {node.enrollment === 'active' && (
-                    <Button type="button" variant="outline" size="sm" onClick={() => void handleRevokeNode(node.nodeId, node.label)}>
-                      {t('remoteAccess.revoke', { defaultValue: 'Revoke' })}
-                    </Button>
-                  )}
-                </div>
-              </SettingsRow>
+              <div key={node.nodeId}>
+                <SettingsRow
+                  label={node.label}
+                  description={[node.platform, node.arch, node.runtimeVersion].filter(Boolean).join(' · ') || undefined}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`text-sm ${EMPHASIS_CLASS[display.emphasis]}`}>
+                      {t(`remoteAccess.nodes.status.${display.key}`, { defaultValue: NODE_STATUS_DEFAULTS[display.key] })}
+                    </span>
+                    {node.enrollment === 'active' && (
+                      <Button type="button" variant="outline" size="sm" onClick={() => void handleRevokeNode(node.nodeId, node.label)}>
+                        {t('remoteAccess.revoke', { defaultValue: 'Revoke' })}
+                      </Button>
+                    )}
+                  </div>
+                </SettingsRow>
+                {node.enrollment !== 'revoked' && <NodeEvidence node={node} />}
+              </div>
             );
           })}
           {runtimeNodes.listing && remoteNodes.length === 0 && (
