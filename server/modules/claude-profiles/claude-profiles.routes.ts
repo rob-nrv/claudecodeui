@@ -1,7 +1,8 @@
 import express, { type Request, type Response } from 'express';
 
+import { claudeLiveUsageService } from '@/modules/claude-profiles/claude-live-usage.service.js';
 import { claudeProfilesService } from '@/modules/claude-profiles/claude-profiles.service.js';
-import type { ClaudeProfile } from '@/shared/types.js';
+import type { ClaudeLiveUsage, ClaudeProfile } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
 type ClaudeProfilesRouterService = {
@@ -12,6 +13,15 @@ type ClaudeProfilesRouterService = {
   removeProfile(id: string): ClaudeProfile;
   verifyProfile(id: string): Promise<ClaudeProfile>;
 };
+
+/** `null` addresses the historical un-isolated `~/.claude` account, which has no profile row. */
+type ClaudeLiveUsageRouterService = {
+  getLiveUsage(profileId: string | null): Promise<ClaudeLiveUsage>;
+  enableBridge(profileId: string | null): Promise<ClaudeLiveUsage>;
+  disableBridge(profileId: string | null): Promise<ClaudeLiveUsage>;
+};
+
+const LEGACY_HOME_LIVE_USAGE_PATH = '/legacy-home/live-usage';
 
 const readPathParam = (value: unknown, name: string): string => {
   if (typeof value === 'string' && value.trim()) {
@@ -32,8 +42,32 @@ const readPathParam = (value: unknown, name: string): string => {
  */
 export function createClaudeProfilesRouter(
   service: ClaudeProfilesRouterService = claudeProfilesService,
+  liveUsageService: ClaudeLiveUsageRouterService = claudeLiveUsageService,
 ): express.Router {
   const router = express.Router();
+
+  // Live usage for the historical account (FT-M07). Registered before every
+  // `/:id` route so this literal segment is never read as a profile id.
+  router.get(
+    LEGACY_HOME_LIVE_USAGE_PATH,
+    asyncHandler(async (_req: Request, res: Response) => {
+      res.json(createApiSuccessResponse({ liveUsage: await liveUsageService.getLiveUsage(null) }));
+    }),
+  );
+
+  router.post(
+    `${LEGACY_HOME_LIVE_USAGE_PATH}/bridge`,
+    asyncHandler(async (_req: Request, res: Response) => {
+      res.json(createApiSuccessResponse({ liveUsage: await liveUsageService.enableBridge(null) }));
+    }),
+  );
+
+  router.delete(
+    `${LEGACY_HOME_LIVE_USAGE_PATH}/bridge`,
+    asyncHandler(async (_req: Request, res: Response) => {
+      res.json(createApiSuccessResponse({ liveUsage: await liveUsageService.disableBridge(null) }));
+    }),
+  );
 
   router.get(
     '/',
@@ -96,6 +130,32 @@ export function createClaudeProfilesRouter(
       const id = readPathParam(req.params.id, 'id');
       const profile = await service.verifyProfile(id);
       res.json(createApiSuccessResponse({ profile }));
+    }),
+  );
+
+  // Live usage for one isolated account (FT-M07): read, and the explicit
+  // user-initiated install/removal of the statusLine capture bridge.
+  router.get(
+    '/:id/live-usage',
+    asyncHandler(async (req: Request, res: Response) => {
+      const id = readPathParam(req.params.id, 'id');
+      res.json(createApiSuccessResponse({ liveUsage: await liveUsageService.getLiveUsage(id) }));
+    }),
+  );
+
+  router.post(
+    '/:id/live-usage/bridge',
+    asyncHandler(async (req: Request, res: Response) => {
+      const id = readPathParam(req.params.id, 'id');
+      res.json(createApiSuccessResponse({ liveUsage: await liveUsageService.enableBridge(id) }));
+    }),
+  );
+
+  router.delete(
+    '/:id/live-usage/bridge',
+    asyncHandler(async (req: Request, res: Response) => {
+      const id = readPathParam(req.params.id, 'id');
+      res.json(createApiSuccessResponse({ liveUsage: await liveUsageService.disableBridge(id) }));
     }),
   );
 

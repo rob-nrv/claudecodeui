@@ -20,6 +20,13 @@ type SessionRow = {
    * always read the same value it was created with.
    */
   claude_profile_id: string | null;
+  /**
+   * The RuntimeNode that owns this session's execution (FT-M07), or NULL when
+   * it was never recorded: every session created before runtime tracking and
+   * every session discovered on disk. Set once at creation
+   * (`createAppSession`) and never updated afterwards.
+   */
+  runtime_node_id: string | null;
   isArchived: number;
   created_at: string;
   updated_at: string;
@@ -31,7 +38,7 @@ type RecentSessionsPage = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, claude_profile_id, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, claude_profile_id, runtime_node_id, isArchived, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -182,6 +189,10 @@ export const sessionsDb = {
    * written here as the session's permanent binding. There is no setter for
    * this column afterwards — resume and every future `chat.send` for this
    * session always read it back from this row, never from client input.
+   *
+   * `runtimeNodeId` follows the same rule (FT-M07): the caller resolves the
+   * RuntimeNode that owns this execution once, and it is never rewritten. A
+   * different runtime is always a different session row.
    */
   createAppSession(
     sessionId: string,
@@ -189,6 +200,7 @@ export const sessionsDb = {
     projectPath: string,
     customName?: string,
     claudeProfileId?: string | null,
+    runtimeNodeId?: string | null,
   ): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
@@ -196,9 +208,9 @@ export const sessionsDb = {
     projectsDb.createProjectPath(normalizedProjectPath);
 
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, claude_profile_id, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, NULL, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, customName ?? null, normalizedProjectPath, claudeProfileId ?? null);
+      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, claude_profile_id, runtime_node_id, isArchived, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run(sessionId, provider, customName ?? null, normalizedProjectPath, claudeProfileId ?? null, runtimeNodeId ?? null);
 
     return sessionId;
   },

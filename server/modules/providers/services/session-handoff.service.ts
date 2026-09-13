@@ -10,6 +10,7 @@ import {
 } from '@/modules/database/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { runtimeNodesService } from '@/modules/runtime-nodes/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import type { ClaudeProfileConnectionState, LLMProvider, NormalizedMessage } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
@@ -66,6 +67,11 @@ type HandoffTargetInput = {
    * refused: the account is always an explicit choice, never a default.
    */
   claudeProfileId?: string | null;
+  /**
+   * RuntimeNode the new run is bound to. `undefined` is only accepted while a
+   * single node exists (see `runtimeNodesService.resolveExecutionTarget`).
+   */
+  runtimeNodeId?: string;
   note?: string | null;
 };
 
@@ -107,6 +113,8 @@ type CreateHandoffResult = {
   sessionName: string;
   sourceSessionId: string;
   taskRootSessionId: string;
+  /** The RuntimeNode the new run is permanently bound to. */
+  runtimeNodeId: string;
 };
 
 type SessionLineageView = {
@@ -122,8 +130,11 @@ type SessionLineageView = {
     sourceClaudeProfileId: string | null;
     sourceModel: string | null;
     sourceEffort: string | null;
+    /** Runtime binding snapshot of the source run; null when it was never recorded. */
+    sourceRuntimeNodeId: string | null;
     targetProvider: LLMProvider;
     targetClaudeProfileId: string | null;
+    targetRuntimeNodeId: string | null;
     /** True once the target produced its own native session. */
     targetStarted: boolean;
     handoffPackage: string;
@@ -135,6 +146,7 @@ type SessionLineageView = {
     targetTitle: string | null;
     targetProvider: LLMProvider;
     targetClaudeProfileId: string | null;
+    targetRuntimeNodeId: string | null;
     targetStarted: boolean;
   }>;
 };
@@ -459,8 +471,10 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
       sourceClaudeProfileId: row.source_claude_profile_id,
       sourceModel: row.source_model,
       sourceEffort: row.source_effort,
+      sourceRuntimeNodeId: row.source_runtime_node_id,
       targetProvider: row.target_provider as LLMProvider,
       targetClaudeProfileId: row.target_claude_profile_id,
+      targetRuntimeNodeId: row.target_runtime_node_id,
       targetStarted: Boolean(targetRow?.provider_session_id),
       handoffPackage: row.handoff_package,
     };
@@ -553,6 +567,8 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
       const source = requireSession(sourceSessionId);
       assertSourceCanHandoff(source);
       const targetClaudeProfileId = resolveTargetBinding(source, input);
+      // Resolved before any I/O, like the account: a refused runtime creates nothing.
+      const targetRuntimeNodeId = runtimeNodesService.resolveExecutionTarget(input.runtimeNodeId);
 
       const sourceProvider = source.provider as LLMProvider;
       const sourceBinding = sourceProvider === 'claude' ? source.claude_profile_id ?? null : null;
@@ -590,12 +606,15 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
         targetSessionId,
         targetProvider: input.provider,
         targetClaudeProfileId,
+        targetRuntimeNodeId,
         targetName: sessionName,
         projectPath,
         sourceSessionId: source.session_id,
         taskRootSessionId,
         sourceProvider,
         sourceClaudeProfileId: sourceBinding,
+        // Snapshot only: the source row itself is never rewritten.
+        sourceRuntimeNodeId: source.runtime_node_id ?? null,
         sourceProviderSessionId: source.provider_session_id,
         sourceModel: source.model,
         sourceEffort: source.effort,
@@ -612,6 +631,7 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
         sessionName,
         sourceSessionId: source.session_id,
         taskRootSessionId,
+        runtimeNodeId: targetRuntimeNodeId,
       };
     },
 
@@ -636,6 +656,7 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
             targetTitle: targetRow ? sessionTitle(targetRow) : null,
             targetProvider: row.target_provider as LLMProvider,
             targetClaudeProfileId: row.target_claude_profile_id,
+            targetRuntimeNodeId: row.target_runtime_node_id,
             targetStarted: Boolean(targetRow?.provider_session_id),
           };
         }),

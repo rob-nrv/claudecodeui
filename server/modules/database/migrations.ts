@@ -8,6 +8,8 @@ import {
   PROJECTS_TABLE_SCHEMA_SQL,
   PROVIDER_MODELS_TABLE_SCHEMA_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL,
+  RUNTIME_NODES_SINGLE_LOCAL_INDEX_SQL,
+  RUNTIME_NODES_TABLE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
   VAPID_KEYS_TABLE_SCHEMA_SQL,
@@ -461,6 +463,35 @@ const addSessionClaudeProfileIdColumn = (db: Database): void => {
   addColumnToTableIfNotExists(db, 'sessions', columnNames, 'claude_profile_id', 'TEXT');
 };
 
+/**
+ * Adds the `runtime_node_id` column that binds an app-created session (one
+ * Run/Leg) to the RuntimeNode owning its execution (FT-M07).
+ *
+ * Left NULL for every existing row on purpose: nothing ever recorded where
+ * those runs executed, so stamping today's machine onto them would manufacture
+ * provenance. NULL is the explicit "runtime not recorded" signal, and such
+ * legacy sessions keep running locally exactly as before. Like
+ * `claude_profile_id`, the column has no setter after insert.
+ */
+const addSessionRuntimeNodeIdColumn = (db: Database): void => {
+  const columnNames = getTableInfo(db, 'sessions').map((column) => column.name);
+  addColumnToTableIfNotExists(db, 'sessions', columnNames, 'runtime_node_id', 'TEXT');
+};
+
+/**
+ * Adds runtime provenance snapshots to FT-M05 handoff lineage. Handoffs that
+ * already exist stay NULL (runtime never recorded) instead of being backfilled.
+ */
+const addHandoffRuntimeNodeColumns = (db: Database): void => {
+  if (!tableExists(db, 'session_handoffs')) {
+    return;
+  }
+
+  const columnNames = getTableInfo(db, 'session_handoffs').map((column) => column.name);
+  addColumnToTableIfNotExists(db, 'session_handoffs', columnNames, 'source_runtime_node_id', 'TEXT');
+  addColumnToTableIfNotExists(db, 'session_handoffs', columnNames, 'target_runtime_node_id', 'TEXT');
+};
+
 const ensureProjectsForSessionPaths = (db: Database): void => {
   if (!tableExists(db, 'sessions')) {
     return;
@@ -516,6 +547,9 @@ export const runMigrations = (db: Database) => {
     db.exec(CLAUDE_PROFILES_TABLE_SCHEMA_SQL);
     db.exec('CREATE INDEX IF NOT EXISTS idx_claude_profiles_is_default ON claude_profiles(is_default)');
 
+    db.exec(RUNTIME_NODES_TABLE_SCHEMA_SQL);
+    db.exec(RUNTIME_NODES_SINGLE_LOCAL_INDEX_SQL);
+
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);
 
@@ -526,6 +560,8 @@ export const runMigrations = (db: Database) => {
     addSessionModelColumn(db);
     addSessionEffortColumn(db);
     addSessionClaudeProfileIdColumn(db);
+    addSessionRuntimeNodeIdColumn(db);
+    addHandoffRuntimeNodeColumns(db);
     ensureProjectsForSessionPaths(db);
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');

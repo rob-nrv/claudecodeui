@@ -301,6 +301,25 @@ const parseProvider = (value: unknown): LLMProvider => {
 };
 
 const MAX_HANDOFF_NOTE_LENGTH = 2000;
+const MAX_RUNTIME_NODE_ID_LENGTH = 128;
+
+/**
+ * Optional explicit RuntimeNode target for a new session or handoff run. An
+ * absent value is forwarded as `undefined`, so the runtime-nodes service can
+ * refuse it whenever more than one node exists instead of picking one.
+ */
+const parseOptionalRuntimeNodeId = (value: unknown): string | undefined => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string' && value.trim() && value.trim().length <= MAX_RUNTIME_NODE_ID_LENGTH) {
+    return value.trim();
+  }
+  throw new AppError('runtimeNodeId must be a runtime node id.', {
+    code: 'RUNTIME_NODE_ID_INVALID',
+    statusCode: 400,
+  });
+};
 
 /**
  * The target is always explicit: `provider` is required, and `claudeProfileId`
@@ -310,6 +329,7 @@ const MAX_HANDOFF_NOTE_LENGTH = 2000;
 const parseSessionHandoffPayload = (payload: unknown): {
   provider: LLMProvider;
   claudeProfileId?: string | null;
+  runtimeNodeId?: string;
   note: string | null;
 } => {
   if (!payload || typeof payload !== 'object') {
@@ -348,9 +368,12 @@ const parseSessionHandoffPayload = (payload: unknown): {
     });
   }
 
+  const runtimeNodeId = parseOptionalRuntimeNodeId(body.runtimeNodeId);
+
   return {
     provider,
     ...(claudeProfileId !== undefined ? { claudeProfileId } : {}),
+    ...(runtimeNodeId !== undefined ? { runtimeNodeId } : {}),
     note: note || null,
   };
 };
@@ -768,7 +791,8 @@ router.post(
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
     const claudeProfileId = typeof body.claudeProfileId === 'string' ? body.claudeProfileId : undefined;
-    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, claudeProfileId);
+    const runtimeNodeId = parseOptionalRuntimeNodeId(body.runtimeNodeId);
+    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, claudeProfileId, runtimeNodeId);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );

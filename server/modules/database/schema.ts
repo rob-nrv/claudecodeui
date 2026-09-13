@@ -235,6 +235,35 @@ CREATE TABLE IF NOT EXISTS session_handoffs (
 );
 `;
 
+/**
+ * RuntimeNodes (FT-M07): machines that can actually execute a Run.
+ *
+ * `node_id` is minted once and never recomputed, so a session's
+ * `runtime_node_id` keeps naming the same machine for its whole life.
+ * `label`, `platform`, `arch` and `runtime_version` are descriptive facts the
+ * node reports about itself; they may be refreshed and are never used to infer
+ * capabilities. `capabilities_json` and `last_seen_at` are the last bounded
+ * probe result: readers re-derive availability from their age instead of
+ * treating a persisted snapshot as current. At most one row is the local node.
+ */
+export const RUNTIME_NODES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS runtime_nodes (
+    node_id TEXT PRIMARY KEY NOT NULL,
+    label TEXT NOT NULL,
+    is_local BOOLEAN NOT NULL DEFAULT 0,
+    platform TEXT,
+    arch TEXT,
+    runtime_version TEXT,
+    last_seen_at INTEGER,
+    capabilities_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
+export const RUNTIME_NODES_SINGLE_LOCAL_INDEX_SQL =
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_nodes_single_local ON runtime_nodes(is_local) WHERE is_local = 1;';
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -290,4 +319,7 @@ ${QUEUED_MESSAGES_TABLE_SCHEMA_SQL}
 
 ${SESSION_HANDOFFS_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_session_handoffs_source ON session_handoffs(source_session_id);
+
+${RUNTIME_NODES_TABLE_SCHEMA_SQL}
+${RUNTIME_NODES_SINGLE_LOCAL_INDEX_SQL}
 `;

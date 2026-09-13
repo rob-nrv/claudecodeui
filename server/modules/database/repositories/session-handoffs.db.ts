@@ -14,6 +14,10 @@ export type SessionHandoffRow = {
   source_title: string | null;
   target_provider: string;
   target_claude_profile_id: string | null;
+  /** Runtime binding of the source run at handoff time; NULL when it was never recorded. */
+  source_runtime_node_id: string | null;
+  /** RuntimeNode the target run was bound to; NULL for handoffs created before FT-M07. */
+  target_runtime_node_id: string | null;
   handoff_package: string;
   created_at: string;
 };
@@ -24,12 +28,15 @@ type CreateHandoffTargetInput = {
   targetProvider: string;
   /** Validated by the caller; becomes the target row's permanent binding. */
   targetClaudeProfileId: string | null;
+  /** Resolved by the caller; becomes the target row's permanent runtime binding. */
+  targetRuntimeNodeId?: string | null;
   targetName: string;
   projectPath: string;
   sourceSessionId: string;
   taskRootSessionId: string;
   sourceProvider: string;
   sourceClaudeProfileId: string | null;
+  sourceRuntimeNodeId?: string | null;
   sourceProviderSessionId: string | null;
   sourceModel: string | null;
   sourceEffort: string | null;
@@ -39,7 +46,8 @@ type CreateHandoffTargetInput = {
 
 const HANDOFF_ROW_COLUMNS = `handoff_id, target_session_id, source_session_id, task_root_session_id,
   source_provider, source_claude_profile_id, source_provider_session_id, source_model, source_effort,
-  source_title, target_provider, target_claude_profile_id, handoff_package, created_at`;
+  source_title, target_provider, target_claude_profile_id, source_runtime_node_id, target_runtime_node_id,
+  handoff_package, created_at`;
 
 /**
  * Persistence for FT-M05 handoff lineage (`session_handoffs`).
@@ -66,11 +74,12 @@ export const sessionHandoffsDb = {
         input.projectPath,
         input.targetName,
         input.targetClaudeProfileId,
+        input.targetRuntimeNodeId ?? null,
       );
 
       db.prepare(
         `INSERT INTO session_handoffs (${HANDOFF_ROW_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
       ).run(
         input.handoffId,
         input.targetSessionId,
@@ -84,6 +93,8 @@ export const sessionHandoffsDb = {
         input.sourceTitle,
         input.targetProvider,
         input.targetClaudeProfileId,
+        input.sourceRuntimeNodeId ?? null,
+        input.targetRuntimeNodeId ?? null,
         input.handoffPackage,
       );
     })();

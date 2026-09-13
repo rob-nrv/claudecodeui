@@ -678,6 +678,139 @@ export type ClaudeAuthStatusProbeResult = {
 };
 
 // ---------------------------
+//----------------- CLAUDE LIVE USAGE TYPES ------------
+/**
+ * One Claude subscription rate-limit window as last reported by Claude Code's
+ * documented statusLine JSON (`rate_limits.five_hour` / `rate_limits.seven_day`).
+ *
+ * `available` carries the reported value exactly as observed. `unavailable`
+ * never carries a number, so a missing or reset window can never render as 0%:
+ * `not_reported` covers an absent, invalid or unattributable window, and
+ * `window_reset` means the last reported `resets_at` has passed, so the old
+ * percentage no longer describes the current window.
+ */
+export type ClaudeLiveUsageWindow =
+  | { state: 'available'; usedPercentage: number; resetsAt: string }
+  | { state: 'unavailable'; reason: 'not_reported' | 'window_reset' };
+
+/**
+ * State of CloudCLI's statusLine capture bridge in one Claude config
+ * directory's `settings.json`.
+ *
+ * - `not_installed`: no CloudCLI bridge; any statusLine there is the user's own.
+ * - `installed`: the current bridge is configured and its script exists.
+ * - `outdated`: a bridge from another CloudCLI version is configured; enabling again updates it.
+ * - `broken`: the bridge is configured but its script is missing, so the status
+ *   line (including a wrapped user status line) cannot run until re-enabled.
+ * - `settings_unreadable`: `settings.json` exists but is not a JSON object, so
+ *   CloudCLI neither interprets nor rewrites it.
+ */
+export type ClaudeStatusLineBridgeState = 'not_installed' | 'installed' | 'outdated' | 'broken' | 'settings_unreadable';
+
+/**
+ * Backend-authoritative live usage for one Claude account (FT-M07).
+ *
+ * Built by the claude-profiles live-usage service, returned by its routes and
+ * rendered by Settings. It never contains a config path, a credential or the
+ * raw statusLine payload. `snapshot.freshness` is derived from the capture age
+ * at read time, so a persisted snapshot is never presented as current.
+ */
+export type ClaudeLiveUsage = {
+  source: 'claude_statusline';
+  bridge: {
+    state: ClaudeStatusLineBridgeState;
+    /** True when the installed bridge chains a statusLine the user already had. */
+    wrapsExistingStatusLine: boolean;
+    /** True when no bridge is installed and the account has its own statusLine. */
+    hasUserStatusLine: boolean;
+  };
+  snapshot: {
+    status: 'available' | 'unavailable';
+    reason: 'no_snapshot' | 'snapshot_invalid' | 'attribution_mismatch' | 'snapshot_from_future' | null;
+    capturedAt: string | null;
+    freshness: 'fresh' | 'stale' | null;
+  };
+  fiveHour: ClaudeLiveUsageWindow;
+  sevenDay: ClaudeLiveUsageWindow;
+};
+
+// ---------------------------
+//----------------- RUNTIME NODE TYPES ------------
+/**
+ * Capabilities a RuntimeNode can be probed for (FT-M07). Deliberately limited
+ * to what the roadmap needs next: running Claude, git for handoff/worktrees,
+ * workspace access, and background execution (FT-M09, not provable yet).
+ */
+export type RuntimeNodeCapabilityId = 'claude-cli' | 'git-cli' | 'workspace-filesystem' | 'background-execution';
+
+/**
+ * Evidence-backed capability status.
+ *
+ * - `available`: a bounded probe ran on the node and proved it.
+ * - `unavailable`: a probe ran and failed; it may succeed later.
+ * - `unsupported`: a probe positively established the node will not provide it.
+ * - `unknown`: nothing proves or disproves it. Never read as available, and
+ *   never replaced by a guess from the platform name.
+ */
+export type RuntimeNodeCapabilityStatus = 'available' | 'unavailable' | 'unsupported' | 'unknown';
+
+/**
+ * Raw result of one capability prober, before it is stamped with a probe time.
+ * Produced by the runtime-nodes probes and mapped to a capability by the
+ * availability evaluation; `detail` must be a short non-sensitive fact such as
+ * a CLI version, never a path.
+ */
+export type RuntimeNodeProbeOutcome =
+  | { outcome: 'proven'; detail?: string | null }
+  | { outcome: 'failed'; reason: string }
+  | { outcome: 'not_supported'; reason: string }
+  | { outcome: 'not_probed'; reason: string };
+
+/** One capability as exposed by the runtime-nodes API. */
+export type RuntimeNodeCapability = {
+  id: RuntimeNodeCapabilityId;
+  status: RuntimeNodeCapabilityStatus;
+  detail: string | null;
+  reason: string | null;
+  /** Epoch milliseconds of the probe that established this entry; null when never probed. */
+  probedAt: number | null;
+};
+
+/**
+ * Whether a node can take new executions right now, derived at read time from
+ * probe freshness and execution capabilities. It is independent from the
+ * control client's `appReady`: a node can execute while no UI bundle is served.
+ *
+ * - `available`: fresh probe and at least one execution capability proven.
+ * - `degraded`: fresh probe, but no execution capability proven.
+ * - `unavailable`: the last probe is too old to vouch for the node.
+ * - `unknown`: the node has never been probed.
+ */
+export type RuntimeNodeAvailability = {
+  state: 'available' | 'degraded' | 'unavailable' | 'unknown';
+  reason: 'fresh_probe' | 'no_execution_capability' | 'probe_stale' | 'never_probed';
+  lastSeenAt: string | null;
+  freshUntil: string | null;
+};
+
+/**
+ * API-facing RuntimeNode returned by the runtime-nodes routes and used by the
+ * sessions/handoff creation flows. `canExecute` is true only for the local node
+ * until remote execution transport exists (FT-M08).
+ */
+export type RuntimeNodeView = {
+  nodeId: string;
+  label: string;
+  isLocal: boolean;
+  canExecute: boolean;
+  platform: string | null;
+  arch: string | null;
+  runtimeVersion: string | null;
+  availability: RuntimeNodeAvailability;
+  capabilities: RuntimeNodeCapability[];
+};
+
+// ---------------------------
 //----------------- SHARED DATABASE CREDENTIAL TYPES ------------
 /**
  * Safe credential view returned by credential listing APIs.

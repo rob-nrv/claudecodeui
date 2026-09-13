@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { claudeProfilesDb, projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { runtimeNodesService } from '@/modules/runtime-nodes/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type {
@@ -19,6 +20,8 @@ type CreateAppSessionResult = {
   projectPath: string;
   sessionName: string;
   claudeProfileId: string | null;
+  /** The RuntimeNode this new session is permanently bound to. */
+  runtimeNodeId: string;
 };
 
 type ArchivedSessionListItem = {
@@ -56,6 +59,8 @@ type SessionDetails = {
   isArchived: boolean;
   /** The Claude account this session is permanently bound to, or null (non-Claude / pre-LOT-2 sessions). */
   claudeProfileId: string | null;
+  /** The RuntimeNode this session is permanently bound to, or null when it was never recorded. */
+  runtimeNodeId: string | null;
   project: {
     projectId: string;
     path: string;
@@ -146,6 +151,8 @@ export const sessionsService = {
     waiting: boolean;
     /** The Claude account this run is bound to, or null (non-Claude / unbound sessions). */
     claudeProfileId: string | null;
+    /** The RuntimeNode executing this run, or null when the session's runtime was never recorded. */
+    runtimeNodeId: string | null;
   }> {
     return chatRunRegistry.listRunningRuns().map((run) => {
       const sessionRow = sessionsDb.getSessionById(run.sessionId);
@@ -154,6 +161,7 @@ export const sessionsService = {
         ...run,
         waiting: pendingCount > 0,
         claudeProfileId: run.provider === 'claude' ? (sessionRow?.claude_profile_id ?? null) : null,
+        runtimeNodeId: sessionRow?.runtime_node_id ?? null,
       };
     });
   },
@@ -236,12 +244,18 @@ export const sessionsService = {
    * for an id that does not exist in `claude_profiles` never reaches the
    * database (`CLOUDCLI_EXTENSION_PLAN.md` F4/F5). Once persisted, this is
    * the session's permanent binding — nothing later re-resolves it.
+   *
+   * `runtimeNodeId` is resolved the same way (FT-M07): an explicit node must
+   * be one this server can execute on, and omitting it is only accepted while
+   * a single node exists. The resolved id is persisted with the row and never
+   * re-resolved on resume.
    */
   createAppSession(
     provider: LLMProvider,
     projectPath: string,
     initialMessage: string,
     claudeProfileId?: string | null,
+    runtimeNodeId?: string | null,
   ): CreateAppSessionResult {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
@@ -263,9 +277,18 @@ export const sessionsService = {
       resolvedClaudeProfileId = trimmedProfileId;
     }
 
+    const resolvedRuntimeNodeId = runtimeNodesService.resolveExecutionTarget(runtimeNodeId);
+
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName, resolvedClaudeProfileId);
+    sessionsDb.createAppSession(
+      sessionId,
+      provider,
+      normalizedProjectPath,
+      sessionName,
+      resolvedClaudeProfileId,
+      resolvedRuntimeNodeId,
+    );
 
     return {
       sessionId,
@@ -273,6 +296,7 @@ export const sessionsService = {
       projectPath: normalizedProjectPath,
       sessionName,
       claudeProfileId: resolvedClaudeProfileId,
+      runtimeNodeId: resolvedRuntimeNodeId,
     };
   },
 
@@ -380,6 +404,7 @@ export const sessionsService = {
       lastActivity: session.updated_at ?? session.created_at ?? null,
       isArchived: Boolean(session.isArchived),
       claudeProfileId: session.claude_profile_id ?? null,
+      runtimeNodeId: session.runtime_node_id ?? null,
       project: project && projectPath
         ? {
             projectId: project.project_id,

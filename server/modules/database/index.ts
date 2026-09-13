@@ -17,6 +17,9 @@ export { pushSubscriptionsDb } from '@/modules/database/repositories/push-subscr
 // queuedMessagesDb: server-side single-slot "send after this run finishes" queue (FT-M03).
 export { queuedMessagesDb } from '@/modules/database/repositories/queued-messages.db.js';
 export type { QueuedMessageRow } from '@/modules/database/repositories/queued-messages.db.js';
+// runtimeNodesDb: used by the runtime-nodes module to persist RuntimeNode identity and last probe results (FT-M07).
+export { runtimeNodesDb } from '@/modules/database/repositories/runtime-nodes.db.js';
+export type { RuntimeNodeRecord } from '@/modules/database/repositories/runtime-nodes.db.js';
 export { scanStateDb } from '@/modules/database/repositories/scan-state.db.js';
 // sessionHandoffsDb: used by Providers to persist FT-M05 Task handoff lineage (source run -> new target run).
 export { sessionHandoffsDb } from '@/modules/database/repositories/session-handoffs.db.js';

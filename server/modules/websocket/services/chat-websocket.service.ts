@@ -4,6 +4,7 @@ import type { WebSocket } from 'ws';
 
 import { claudeProfilesDb, sessionsDb } from '@/modules/database/index.js';
 import { providerModelsService } from '@/modules/providers/index.js';
+import { runtimeNodesService } from '@/modules/runtime-nodes/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import {
@@ -196,6 +197,21 @@ async function handleChatSend(
       return;
     }
     claudeProfileId = session.claude_profile_id;
+  }
+
+  // A session bound to a RuntimeNode only ever executes on that node. This
+  // server runs its own node's sessions only, so a foreign binding halts here
+  // instead of silently executing on another machine. Never-recorded (legacy)
+  // bindings keep running locally exactly as before (FT-M07).
+  const runtimeCheck = runtimeNodesService.checkSessionRunsHere(session.runtime_node_id);
+  if (!runtimeCheck.ok) {
+    sendProtocolError(
+      ws,
+      runtimeCheck.code,
+      'This session is bound to another runtime node and cannot run on this one.',
+      sessionId
+    );
+    return;
   }
 
   const run = chatRunRegistry.startRun({

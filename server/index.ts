@@ -20,6 +20,7 @@ import {
     createLocalServerMarkerStore,
     createRuntimeIdentity,
 } from '@/modules/runtime/index.js';
+import { runtimeNodesRoutes, runtimeNodesService } from '@/modules/runtime-nodes/index.js';
 
 import { getConnectableHost, buildLoopbackOrigins, resolveBindHost } from '../shared/networkHosts.js';
 
@@ -231,6 +232,9 @@ app.use('/api/providers', authenticateToken, providerRoutes);
 // Claude multi-account profile routes (protected)
 app.use('/api/claude-profiles', authenticateToken, claudeProfilesRoutes);
 
+// RuntimeNode identity and probed capabilities (protected, read-only; FT-M07)
+app.use('/api/runtime-nodes', authenticateToken, runtimeNodesRoutes);
+
 // Agent API Routes (uses API key authentication)
 app.use('/api/agent', agentRoutes);
 
@@ -343,6 +347,10 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+
+        // Register this machine as the local RuntimeNode: stable id, descriptive
+        // facts only. Capabilities are probed later, on demand and bounded.
+        runtimeNodesService.registerLocalNode(RUNNING_VERSION);
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
