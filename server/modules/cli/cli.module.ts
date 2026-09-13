@@ -116,5 +116,16 @@ export function createCliApplication(): CliApplication {
       const { startBrowserUseMcp } = await import('../browser-use/index.js');
       await startBrowserUseMcp();
     },
+    runNodeAgent: async (argumentsList) => {
+      // Lazy: only `cloudcli node ...` loads the RuntimeNode agent graph.
+      const { runNodeAgentCli } = await import('../node-agent/index.js');
+      return runNodeAgentCli(argumentsList, {
+        environment: process.env,
+        homeDirectory,
+        runtimeVersion: packageMetadata.version,
+        log: (message) => console.log(message),
+        error: (message) => console.error(message),
+      });
+    },
   });
 }

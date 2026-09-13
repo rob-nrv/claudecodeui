@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 
 import { getConnection, userDb } from '@/modules/database/index.js';
+import { isRemoteTransport } from '@/modules/remote-access/index.js';
 
 import { authenticateToken, generateToken } from './auth.middleware.js';
 import { createAuthRouter } from './auth.routes.js';
@@ -36,4 +37,8 @@ const authService = createAuthService({
 });
 
 /** Auth router assembled for the server entrypoint. */
-export const authRoutes = createAuthRouter(authService, authenticateToken);
+export const authRoutes = createAuthRouter(
+  authService,
+  authenticateToken,
+  (req) => (isRemoteTransport(req) ? 'remote' : 'local'),
+);

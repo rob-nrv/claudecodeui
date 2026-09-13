@@ -788,15 +788,56 @@ export type RuntimeNodeCapability = {
  */
 export type RuntimeNodeAvailability = {
   state: 'available' | 'degraded' | 'unavailable' | 'unknown';
-  reason: 'fresh_probe' | 'no_execution_capability' | 'probe_stale' | 'never_probed';
+  /**
+   * Local-node reasons come from probe age (FT-M07). Remote-node reasons
+   * (FT-M08) come from the authenticated link: `link_connected` (live link and
+   * Claude CLI proven by a probe requested during this connection),
+   * `probe_pending` (connected, no probe answered yet on this connection),
+   * `link_offline` / `link_stale` / `never_connected` (no usable link),
+   * `identity_conflict` (the same credential keeps connecting from several
+   * places), `protocol_incompatible` and `revoked`.
+   */
+  reason:
+    | 'fresh_probe'
+    | 'no_execution_capability'
+    | 'probe_stale'
+    | 'never_probed'
+    | 'link_connected'
+    | 'probe_pending'
+    | 'link_offline'
+    | 'link_stale'
+    | 'never_connected'
+    | 'identity_conflict'
+    | 'protocol_incompatible'
+    | 'revoked';
   lastSeenAt: string | null;
   freshUntil: string | null;
 };
 
 /**
+ * Whether one project's workspace can be used on one node, as returned by the
+ * runtime-nodes listing when it is asked about a project (FT-M08).
+ *
+ * - `available`: the local node, whose project path is the project itself.
+ * - `mapped`: a remote node verified (itself, inside its own workspace root)
+ *   the folder explicitly mapped to this project.
+ * - `unmapped`: nobody mapped a folder on that node; nothing is assumed.
+ * - `unavailable`: the local project folder is missing, or a node refused the
+ *   mapped folder when it last checked.
+ *
+ * Paths are never part of this view.
+ */
+export type RuntimeNodeWorkspaceView = {
+  state: 'available' | 'mapped' | 'unmapped' | 'unavailable';
+  reason: string | null;
+  verifiedAt: string | null;
+};
+
+/**
  * API-facing RuntimeNode returned by the runtime-nodes routes and used by the
- * sessions/handoff creation flows. `canExecute` is true only for the local node
- * until remote execution transport exists (FT-M08).
+ * sessions/handoff creation flows. `canExecute` is true for the local node and,
+ * since FT-M08, for an enrolled remote node only while its authenticated link
+ * is live and proven able to run Claude.
  */
 export type RuntimeNodeView = {
   nodeId: string;
@@ -808,6 +849,143 @@ export type RuntimeNodeView = {
   runtimeVersion: string | null;
   availability: RuntimeNodeAvailability;
   capabilities: RuntimeNodeCapability[];
+  /**
+   * Who produced the capability evidence: this server probing itself, or an
+   * authenticated remote node answering a probe this server asked for. A
+   * remote node's answer is still that node's own report.
+   */
+  evidence: 'local_probe' | 'node_probe';
+  /**
+   * Credential lifecycle. `unenrolled` rows have no credential and can never
+   * connect; `revoked` nodes are refused forever and closed immediately.
+   */
+  enrollment: 'local' | 'active' | 'revoked' | 'unenrolled';
+  /** Present only when the listing was asked about one project. */
+  workspace?: RuntimeNodeWorkspaceView;
+};
+
+// ---------------------------
+//----------------- RUNTIME NODE LINK PROTOCOL TYPES ------------
+/**
+ * Provider options a control plane forwards to a RuntimeNode for one run
+ * (FT-M08). Deliberately a whitelist: nothing path-like (cwd comes from the
+ * verified workspace mapping), no account binding (a remote node runs with its
+ * own local provider login), and no attachments (they live on the control
+ * plane's disk). Produced by the runtime-nodes module, consumed by the
+ * node-agent module.
+ */
+export type RuntimeNodeLinkRunOptions = {
+  model?: string;
+  effort?: string;
+  permissionMode?: string;
+  toolsSettings?: unknown;
+  sessionSummary?: string;
+};
+
+/**
+ * Frames a control plane sends over an authenticated RuntimeNode link. Every
+ * request carries an id minted by the control plane; a node answers only ids it
+ * received, and the control plane accepts answers only to ids it is waiting
+ * for. Produced by runtime-nodes, handled by node-agent.
+ */
+export type RuntimeNodeLinkServerFrame =
+  | {
+    type: 'welcome';
+    nodeId: string;
+    protocolVersion: number;
+    serverTime: number;
+    /** Answer to the node's `hello.activeExecutions`: which runs may keep streaming. */
+    resume: Array<{ executionId: string; accepted: boolean; lastSeq: number }>;
+  }
+  | { type: 'probe.request'; requestId: string }
+  | { type: 'workspace.verify'; requestId: string; path: string }
+  | {
+    type: 'run.start';
+    executionId: string;
+    appSessionId: string;
+    provider: 'claude';
+    providerSessionId: string | null;
+    command: string;
+    cwd: string;
+    options: RuntimeNodeLinkRunOptions;
+  }
+  | { type: 'run.cancel'; executionId: string }
+  | {
+    type: 'approval.resolve';
+    requestId: string;
+    executionId: string;
+    approvalId: string;
+    decision: ProviderPermissionDecision;
+  }
+  | {
+    type: 'history.fetch';
+    requestId: string;
+    appSessionId: string;
+    providerSessionId: string;
+    cwd: string;
+    limit: number | null;
+    offset: number;
+  };
+
+/**
+ * Frames a RuntimeNode sends over its link. `seq` is per execution and
+ * monotonic across `run.event`, `run.provider_session` and `run.finished`, so a
+ * control plane can drop replays after a reconnect. Produced by node-agent,
+ * validated field-by-field by runtime-nodes (never trusted as typed).
+ */
+export type RuntimeNodeLinkNodeFrame =
+  | {
+    type: 'hello';
+    protocolVersion: number;
+    runtimeVersion: string | null;
+    platform: string | null;
+    arch: string | null;
+    activeExecutions: Array<{ executionId: string; lastSeq: number }>;
+  }
+  | { type: 'heartbeat' }
+  | { type: 'probe.result'; requestId: string; outcomes: Record<string, RuntimeNodeProbeOutcome> }
+  | {
+    type: 'workspace.result';
+    requestId: string;
+    ok: boolean;
+    reason: string | null;
+    /** The folder as the node resolved it (real path inside its workspace root) when `ok`. */
+    path: string | null;
+  }
+  | { type: 'run.accepted'; executionId: string }
+  | { type: 'run.rejected'; executionId: string; code: string }
+  | { type: 'run.event'; executionId: string; seq: number; message: unknown }
+  | { type: 'run.provider_session'; executionId: string; seq: number; providerSessionId: string }
+  | { type: 'run.finished'; executionId: string; seq: number; outcome: 'completed' | 'failed' | 'aborted' }
+  | { type: 'run.cancel_result'; executionId: string; aborted: boolean }
+  | { type: 'approval.result'; requestId: string; resolution: ProviderPermissionResolution }
+  | { type: 'history.result'; requestId: string; ok: boolean; result?: FetchHistoryResult; code?: string };
+
+/**
+ * One parsed `Authorization: CloudCLI-Node-v1 ...` upgrade header. Produced by
+ * the shared node-link auth parser; the runtime-nodes link service verifies the
+ * signature against the enrolled public key, the clock window and its nonce
+ * cache before trusting `nodeId`.
+ */
+export type ParsedRuntimeNodeLinkAuthorization = {
+  nodeId: string;
+  timestamp: number;
+  nonce: string;
+  signature: string;
+};
+
+// ---------------------------
+//----------------- ABUSE RATE LIMIT TYPES ------------
+/**
+ * In-memory failure limiter returned by `createFailureRateLimiter`. Used by
+ * remote browser pairing (remote-access) and RuntimeNode enrollment
+ * (runtime-nodes) so guessing a one-time code or a password is throttled per
+ * client address and globally. `retryAfterMs` is 0 when an attempt is allowed.
+ */
+export type FailureRateLimiter = {
+  check(clientKey: string): { allowed: boolean; retryAfterMs: number };
+  recordFailure(clientKey: string): void;
+  reset(clientKey: string): void;
 };
 
 // ---------------------------

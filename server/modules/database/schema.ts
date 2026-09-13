@@ -264,6 +264,96 @@ CREATE TABLE IF NOT EXISTS runtime_nodes (
 export const RUNTIME_NODES_SINGLE_LOCAL_INDEX_SQL =
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_nodes_single_local ON runtime_nodes(is_local) WHERE is_local = 1;';
 
+/**
+ * RuntimeNode credentials (FT-M08): the Ed25519 public key a remote node proved
+ * it holds when it enrolled, plus the credential lifecycle. Kept apart from
+ * `runtime_nodes` so a credential can be revoked without touching the node's
+ * identity or any session provenance that names it. A node row without a
+ * credential can never connect, and `revoked` is terminal: a machine that
+ * should come back enrolls again and becomes a new node.
+ */
+export const RUNTIME_NODE_CREDENTIALS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS runtime_node_credentials (
+    node_id TEXT PRIMARY KEY NOT NULL,
+    public_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'active',
+    enrolled_at INTEGER NOT NULL,
+    revoked_at INTEGER,
+    FOREIGN KEY (node_id) REFERENCES runtime_nodes(node_id) ON DELETE CASCADE
+);
+`;
+
+/**
+ * One-time RuntimeNode enrollment codes (FT-M08). Only the SHA-256 of the
+ * normalized code is stored; a code expires within minutes and `used_at` makes
+ * redemption single-use.
+ */
+export const RUNTIME_NODE_ENROLLMENTS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS runtime_node_enrollments (
+    code_hash TEXT PRIMARY KEY NOT NULL,
+    label TEXT,
+    created_by_user_id INTEGER,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    node_id TEXT
+);
+`;
+
+/**
+ * Explicit project-to-folder mappings on remote RuntimeNodes (FT-M08).
+ * `project_path` is the control plane's project key; `node_path` is the folder
+ * as the node itself resolved it inside its own workspace root. A row exists
+ * only after the node verified the folder; `status` records the last answer.
+ */
+export const RUNTIME_NODE_WORKSPACES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS runtime_node_workspaces (
+    node_id TEXT NOT NULL,
+    project_path TEXT NOT NULL,
+    node_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    verified_at INTEGER NOT NULL,
+    PRIMARY KEY (node_id, project_path),
+    FOREIGN KEY (node_id) REFERENCES runtime_nodes(node_id) ON DELETE CASCADE
+);
+`;
+
+/**
+ * One-time codes that let a new browser pair through the remote gateway
+ * (FT-M08). Issued by an already authenticated session; hash-only, short-lived,
+ * single-use.
+ */
+export const REMOTE_PAIRING_CODES_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS remote_pairing_codes (
+    code_hash TEXT PRIMARY KEY NOT NULL,
+    created_by_user_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+);
+`;
+
+/**
+ * Server-side sessions for browsers paired through the remote gateway
+ * (FT-M08). The browser holds only an HttpOnly cookie whose SHA-256 is
+ * `token_hash`; `session_id` is a separate public id used to list and revoke.
+ * Idle (`last_seen_at`) and absolute (`expires_at`) expiry and revocation are
+ * all enforced server-side on every request.
+ */
+export const REMOTE_BROWSER_SESSIONS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS remote_browser_sessions (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    label TEXT,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -322,4 +412,10 @@ CREATE INDEX IF NOT EXISTS idx_session_handoffs_source ON session_handoffs(sourc
 
 ${RUNTIME_NODES_TABLE_SCHEMA_SQL}
 ${RUNTIME_NODES_SINGLE_LOCAL_INDEX_SQL}
+
+${RUNTIME_NODE_CREDENTIALS_TABLE_SCHEMA_SQL}
+${RUNTIME_NODE_ENROLLMENTS_TABLE_SCHEMA_SQL}
+${RUNTIME_NODE_WORKSPACES_TABLE_SCHEMA_SQL}
+${REMOTE_PAIRING_CODES_TABLE_SCHEMA_SQL}
+${REMOTE_BROWSER_SESSIONS_TABLE_SCHEMA_SQL}
 `;

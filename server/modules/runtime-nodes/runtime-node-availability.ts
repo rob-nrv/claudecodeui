@@ -133,6 +133,92 @@ export function parseStoredRuntimeNodeCapabilities(capabilitiesJson: string | nu
   });
 }
 
+/** A remote link silent for longer than this no longer vouches for its node. */
+export const REMOTE_LINK_STALE_AFTER_MS = 60_000;
+
+/**
+ * Availability of a remote RuntimeNode (FT-M08), derived at read time from its
+ * credential and its authenticated link. Capability evidence only counts when
+ * it was produced during the CURRENT connection: a probe answered before the
+ * node reconnected proves nothing about the process now connected.
+ *
+ * Consumed by the runtime-nodes service for every remote node view.
+ */
+export function resolveRemoteRuntimeNodeAvailability(input: {
+  enrollment: 'active' | 'revoked' | 'unenrolled';
+  link: { connectedAt: number; lastFrameAt: number; protocolCompatible: boolean } | null;
+  identityConflict: boolean;
+  lastSeenAt: number | null;
+  capabilities: RuntimeNodeCapability[];
+  now: number;
+  staleAfterMs?: number;
+}): RuntimeNodeAvailability {
+  const staleAfterMs = input.staleAfterMs ?? REMOTE_LINK_STALE_AFTER_MS;
+  const seenAt = input.link?.lastFrameAt ?? input.lastSeenAt;
+  const lastSeenAt = seenAt !== null && Number.isFinite(seenAt) ? new Date(seenAt).toISOString() : null;
+  const freshUntil = input.link ? new Date(input.link.lastFrameAt + staleAfterMs).toISOString() : null;
+  const result = (state: RuntimeNodeAvailability['state'], reason: RuntimeNodeAvailability['reason']): RuntimeNodeAvailability =>
+    ({ state, reason, lastSeenAt, freshUntil });
+
+  if (input.enrollment === 'revoked') {
+    return result('unavailable', 'revoked');
+  }
+  if (input.enrollment === 'unenrolled') {
+    return result('unknown', 'never_connected');
+  }
+  if (input.identityConflict) {
+    return result('degraded', 'identity_conflict');
+  }
+  if (!input.link) {
+    return input.lastSeenAt === null ? result('unknown', 'never_connected') : result('unavailable', 'link_offline');
+  }
+  if (input.now - input.link.lastFrameAt > staleAfterMs) {
+    return result('unavailable', 'link_stale');
+  }
+  if (!input.link.protocolCompatible) {
+    return result('degraded', 'protocol_incompatible');
+  }
+
+  const connectedAt = input.link.connectedAt;
+  const currentEvidence = input.capabilities.filter(
+    (capability) => capability.probedAt !== null && capability.probedAt >= connectedAt,
+  );
+  if (currentEvidence.some((capability) => EXECUTION_CAPABILITY_IDS.has(capability.id) && capability.status === 'available')) {
+    return result('available', 'link_connected');
+  }
+  return currentEvidence.length > 0 ? result('degraded', 'no_execution_capability') : result('degraded', 'probe_pending');
+}
+
+/**
+ * Turns an untrusted probe answer from a remote node into outcomes for the
+ * known capability ids only. Unknown ids, unknown outcome kinds and non-string
+ * fields are dropped; a capability the node did not answer reads `not_probed`.
+ * The node's answer can never add a capability id or skip sanitization.
+ */
+export function parseRemoteProbeOutcomes(value: unknown): Record<RuntimeNodeCapabilityId, RuntimeNodeProbeOutcome> {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const outcomes = {} as Record<RuntimeNodeCapabilityId, RuntimeNodeProbeOutcome>;
+  for (const id of RUNTIME_NODE_CAPABILITY_IDS) {
+    const entry = source[id];
+    const record = entry && typeof entry === 'object' ? entry as Record<string, unknown> : null;
+    const reason = typeof record?.reason === 'string' ? record.reason : 'not_reported';
+    switch (record?.outcome) {
+      case 'proven':
+        outcomes[id] = { outcome: 'proven', detail: typeof record.detail === 'string' ? record.detail : null };
+        break;
+      case 'failed':
+        outcomes[id] = { outcome: 'failed', reason };
+        break;
+      case 'not_supported':
+        outcomes[id] = { outcome: 'not_supported', reason };
+        break;
+      default:
+        outcomes[id] = { outcome: 'not_probed', reason: 'not_reported' };
+    }
+  }
+  return outcomes;
+}
+
 /**
  * Derives availability from evidence age and proven execution capabilities.
  * Nothing about the control client (such as `appReady`) takes part: a node's

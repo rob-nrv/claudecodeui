@@ -20,9 +20,10 @@ import {
     createLocalServerMarkerStore,
     createRuntimeIdentity,
 } from '@/modules/runtime/index.js';
-import { runtimeNodesRoutes, runtimeNodesService } from '@/modules/runtime-nodes/index.js';
+import { runtimeNodeLinkRoutes, runtimeNodesRoutes, runtimeNodesService } from '@/modules/runtime-nodes/index.js';
+import { createRemoteAccess, readRemoteGatewayConfig } from '@/modules/remote-access/index.js';
 
-import { getConnectableHost, buildLoopbackOrigins, resolveBindHost } from '../shared/networkHosts.js';
+import { getConnectableHost, buildLoopbackOrigins, isLoopbackHost, resolveBindHost } from '../shared/networkHosts.js';
 
 import { createGitModule } from './modules/git/index.js';
 import {
@@ -112,13 +113,32 @@ const agentRoutes = createAgentModule({
     queryOpenCode,
 });
 
-// Single WebSocket server that handles chat, shell, and plugin proxy paths.
+const HOST = resolveBindHost(process.env.HOST);
+const DISPLAY_HOST = getConnectableHost(HOST);
+
+// Remote access (FT-M08): a separate, explicitly configured gateway listener
+// with TLS, browser pairing and revocable server-side sessions. The listener
+// above is never changed by it and stays loopback-only by default.
+const remoteAccess = createRemoteAccess({
+    configResult: readRemoteGatewayConfig(process.env, { isPlatform: IS_PLATFORM, serverPort: SERVER_PORT }),
+    localListener: { host: HOST, port: SERVER_PORT, loopbackOnly: isLoopbackHost(HOST) },
+    authenticateToken,
+});
+
+// Single WebSocket server that handles chat, shell, plugin proxy and RuntimeNode link paths.
 const wss = createWebSocketServer(server, {
     verifyClient: {
         isPlatform: IS_PLATFORM,
         authenticateWebSocket,
         allowedOrigins: ALLOWED_ORIGINS,
+        remote: remoteAccess.websocket,
+        nodeLink: {
+            path: runtimeNodesService.link.path,
+            verify: (request) => runtimeNodesService.link.verifyUpgrade(request),
+        },
     },
+    handleNodeLinkConnection: (ws, request) => runtimeNodesService.link.handleConnection(ws, request),
+    onBrowserConnection: (ws, request) => remoteAccess.trackSocket(ws, request),
     chat: {
         runtime: providerRuntimeService,
     },
@@ -139,6 +159,11 @@ const wss = createWebSocketServer(server, {
 
 // Make WebSocket server available to routes
 app.locals.wss = wss;
+
+// Applies only to requests that arrived through the remote gateway listener:
+// security headers, CSRF origin checks, URL-credential refusal and the
+// remote session cookie. Local requests pass through untouched.
+app.use(remoteAccess.requestGuard);
 
 app.use(cors({
     origin(origin, callback) {
@@ -161,6 +186,11 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {
+    // Remote callers learn liveness only, nothing about the installation.
+    if (remoteAccess.websocket.isRemote(req)) {
+        res.json({ status: 'ok' });
+        return;
+    }
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -180,11 +210,19 @@ app.get('/health', (req, res) => {
     });
 });
 
+// RuntimeNode enrollment (public, authenticated by a one-time code, rate
+// limited, browsers refused; FT-M08). Mounted before the optional API key
+// check because node agents never hold that key.
+app.use('/api/runtime-node-link', runtimeNodeLinkRoutes);
+
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
 
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
+
+// Remote browser pairing, remote sessions and gateway status (FT-M08)
+app.use('/api/remote-access', remoteAccess.router);
 
 // File Tree API Routes (protected)
 app.use('/api/file-tree', authenticateToken, fileTreeRoutes);
@@ -315,8 +353,6 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-const HOST = resolveBindHost(process.env.HOST);
-const DISPLAY_HOST = getConnectableHost(HOST);
 const localServerMarkerStore = createLocalServerMarkerStore();
 
 function getErrorMessage(error: unknown): string {
@@ -385,6 +421,23 @@ async function startServer() {
             console.log(`${terminalTextStyles.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
             console.log('');
 
+            if (!isLoopbackHost(HOST)) {
+                console.warn(`${terminalTextStyles.warn('[WARN]')} HOST=${HOST}: port ${SERVER_PORT} is reachable from the network without the remote gateway's TLS and pairing. Keep it on loopback and use CLOUDCLI_REMOTE_GATEWAY for remote access.`);
+            }
+
+            // The remote gateway is a second listener; its failure never affects this one.
+            const gatewayStatus = await remoteAccess.startGateway({
+                handleRequest: app,
+                handleUpgrade: (request, socket, head) => {
+                    wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+                },
+            });
+            if (gatewayStatus.state === 'listening') {
+                console.log(`${terminalTextStyles.info('[INFO]')} Remote gateway (${gatewayStatus.mode}): ${terminalTextStyles.bright(String(gatewayStatus.publicOrigin))} on ${gatewayStatus.bindHost}:${gatewayStatus.port}`);
+            } else if (gatewayStatus.state === 'failed') {
+                console.warn(`${terminalTextStyles.warn('[WARN]')} Remote gateway not started: ${gatewayStatus.error}`);
+            }
+
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();
 
@@ -406,6 +459,11 @@ async function startServer() {
                 await stopAllPlugins();
             } catch (err) {
                 console.error('[Plugins] Error stopping plugins during shutdown:', getErrorMessage(err));
+            }
+            try {
+                await remoteAccess.close();
+            } catch (err) {
+                console.error('[Remote] Error closing the remote gateway during shutdown:', getErrorMessage(err));
             }
             try {
                 await removeLocalServerMarker();

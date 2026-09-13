@@ -569,6 +569,11 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
       const targetClaudeProfileId = resolveTargetBinding(source, input);
       // Resolved before any I/O, like the account: a refused runtime creates nothing.
       const targetRuntimeNodeId = runtimeNodesService.resolveExecutionTarget(input.runtimeNodeId);
+      runtimeNodesService.assertNodeCanRun(targetRuntimeNodeId, {
+        provider: input.provider,
+        claudeProfileId: targetClaudeProfileId,
+        projectPath: source.project_path?.trim() ?? '',
+      });
 
       const sourceProvider = source.provider as LLMProvider;
       const sourceBinding = sourceProvider === 'claude' ? source.claude_profile_id ?? null : null;

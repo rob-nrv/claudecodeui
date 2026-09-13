@@ -114,6 +114,40 @@ export const runtimeNodesDb = {
     return runtimeNodesDb.getById(nodeId) as RuntimeNodeRecord;
   },
 
+  /**
+   * Nodes that still count for targeting: the local node, unenrolled rows and
+   * nodes with an active credential. Revoked nodes are terminal and never make
+   * a single-node installation ask the user to choose (FT-M08).
+   */
+  countNotRevoked(): number {
+    const row = getConnection()
+      .prepare(
+        `SELECT COUNT(*) AS count FROM runtime_nodes n
+         LEFT JOIN runtime_node_credentials c ON c.node_id = n.node_id
+         WHERE c.status IS NULL OR c.status = 'active'`
+      )
+      .get() as { count: number };
+    return row.count;
+  },
+
+  /** Descriptive facts an authenticated remote node reported in its hello; never capabilities. */
+  updateRemoteFacts(nodeId: string, facts: { platform: string | null; arch: string | null; runtimeVersion: string | null }): void {
+    getConnection()
+      .prepare(
+        `UPDATE runtime_nodes
+         SET platform = ?, arch = ?, runtime_version = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE node_id = ? AND is_local = 0`
+      )
+      .run(facts.platform, facts.arch, facts.runtimeVersion, nodeId);
+  },
+
+  /** Last time an authenticated remote link was heard from; capabilities are left untouched. */
+  recordSeen(nodeId: string, lastSeenAt: number): void {
+    getConnection()
+      .prepare('UPDATE runtime_nodes SET last_seen_at = ? WHERE node_id = ? AND is_local = 0')
+      .run(lastSeenAt, nodeId);
+  },
+
   /** Records one completed probe of a node: when it answered and what it proved. */
   recordProbe(nodeId: string, probe: { lastSeenAt: number; capabilitiesJson: string }): void {
     getConnection()

@@ -11,6 +11,23 @@ type WebSocketAuthDependencies = {
     [key: string]: unknown;
   } | null;
   allowedOrigins: Set<string>;
+  /**
+   * Browser upgrades that arrived through the Remote Gateway (FT-M08). They
+   * authenticate only with the remote session cookie from exactly the public
+   * origin; a URL token is never accepted on that transport.
+   */
+  remote?: {
+    isRemote(request: AuthenticatedWebSocketRequest): boolean;
+    authenticate(request: AuthenticatedWebSocketRequest): { userId: number; username: string } | null;
+  };
+  /**
+   * The RuntimeNode link (FT-M08). It never uses browser credentials: the
+   * node proves possession of its enrolled key in a signed header instead.
+   */
+  nodeLink?: {
+    path: string;
+    verify(request: AuthenticatedWebSocketRequest): boolean;
+  };
 };
 
 /**
@@ -21,6 +38,27 @@ export function verifyWebSocketClient(
   dependencies: WebSocketAuthDependencies
 ): boolean {
   const request = info.req as AuthenticatedWebSocketRequest;
+  const upgradeUrl = new URL(request.url ?? '/', 'http://localhost');
+
+  // Node links are checked first and exclusively: a browser credential can
+  // never open one, and a node credential can never open a browser path.
+  if (dependencies.nodeLink && upgradeUrl.pathname === dependencies.nodeLink.path) {
+    const verified = dependencies.nodeLink.verify(request);
+    if (!verified) {
+      console.log('[WARN] Runtime node link upgrade rejected');
+    }
+    return verified;
+  }
+
+  if (dependencies.remote?.isRemote(request)) {
+    const remoteUser = dependencies.remote.authenticate(request);
+    if (!remoteUser) {
+      console.log('[WARN] Remote WebSocket upgrade rejected');
+      return false;
+    }
+    request.user = remoteUser;
+    return true;
+  }
 
   // `cors()` only covers Express HTTP routes; the ws upgrade handshake needs
   // its own check against the same allowlist (no wildcard, "null" never matches).
@@ -30,7 +68,6 @@ export function verifyWebSocketClient(
     return false;
   }
 
-  const upgradeUrl = new URL(request.url ?? '/', 'http://localhost');
   const loggedUrl = new URL(upgradeUrl);
   if (loggedUrl.searchParams.has('token')) {
     loggedUrl.searchParams.set('token', 'REDACTED');

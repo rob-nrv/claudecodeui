@@ -11,6 +11,7 @@ import { providerSkillsService } from '@/modules/providers/services/skills.servi
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { sessionHandoffService } from '@/modules/providers/services/session-handoff.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { runtimeNodesService } from '@/modules/runtime-nodes/index.js';
 import type {
   CustomProviderModelInput,
   LLMProvider,
@@ -801,7 +802,8 @@ router.get(
   '/sessions/running',
   asyncHandler(async (_req: Request, res: Response) => {
     const sessions = sessionsService.listRunningSessions(
-      (sessionId) => providerRuntimeService.getPendingApprovalsForSession(sessionId).length,
+      (sessionId) => providerRuntimeService.getPendingApprovalsForSession(sessionId).length
+        + runtimeNodesService.remoteExecution.getPendingApprovals(sessionId).length,
     );
     res.json(createApiSuccessResponse({ sessions }));
   }),

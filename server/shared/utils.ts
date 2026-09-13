@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verify } from 'node:crypto';
 import fs from 'node:fs';
 import {
   access,
@@ -23,7 +23,9 @@ import type {
   AnyRecord,
   ApiSuccessShape,
   AppErrorOptions,
+  FailureRateLimiter,
   NormalizedMessage,
+  ParsedRuntimeNodeLinkAuthorization,
   ProviderCurrentActiveModel,
   ProviderModelsDefinition,
   ProviderSkillSource,
@@ -1175,4 +1177,254 @@ export function findApplicationRoot(startDirectory: string): string {
   return path.basename(parentDirectory) === 'dist-server'
     ? path.dirname(parentDirectory)
     : parentDirectory;
+}
+
+// ---------------------------
+//----------------- ONE-TIME CODE AND SECRET HASH UTILITIES ------------
+/** Crockford base32: no I, L, O or U, so a code retyped on a phone is unambiguous. */
+const ONE_TIME_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const ONE_TIME_CODE_LENGTH = 12;
+
+/**
+ * Generates a short-lived, human-typed code: 12 Crockford base32 characters
+ * (60 bits from the CSPRNG) formatted `XXXX-XXXX-XXXX`. Used by remote browser
+ * pairing (remote-access) and RuntimeNode enrollment (runtime-nodes).
+ *
+ * Callers must persist only `hashSecretValue(normalizeOneTimeCode(code))`, show
+ * the code once, expire it within minutes and redeem it at most once: a code is
+ * an introduction, never a long-lived credential.
+ */
+export function generateOneTimeCode(): string {
+  const bytes = randomBytes(ONE_TIME_CODE_LENGTH);
+  let code = '';
+  for (let index = 0; index < ONE_TIME_CODE_LENGTH; index += 1) {
+    // 256 is a multiple of 32, so the modulo introduces no bias.
+    code += ONE_TIME_CODE_ALPHABET[bytes[index] % ONE_TIME_CODE_ALPHABET.length];
+  }
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`;
+}
+
+/**
+ * Canonicalizes a typed one-time code: case, spaces and dashes are ignored and
+ * the look-alikes O, I and L read as 0, 1 and 1. Returns null for anything that
+ * cannot be a code, so callers refuse it without touching the database.
+ */
+export function normalizeOneTimeCode(input: unknown): string | null {
+  if (typeof input !== 'string' || input.length > 64) {
+    return null;
+  }
+  const compact = input.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+  if (compact.length !== ONE_TIME_CODE_LENGTH) {
+    return null;
+  }
+  return [...compact].every((character) => ONE_TIME_CODE_ALPHABET.includes(character)) ? compact : null;
+}
+
+/**
+ * SHA-256 hex digest of a high-entropy secret (random session tokens,
+ * normalized one-time codes). Remote-access and runtime-nodes persist only this
+ * digest, so reading the database never yields a usable credential. It is not
+ * a password hash and must never be used for user-chosen secrets.
+ */
+export function hashSecretValue(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+// ---------------------------
+//----------------- ABUSE RATE LIMIT UTILITIES ------------
+/**
+ * Creates an in-memory sliding-window failure limiter for guessable secrets
+ * (remote-access pairing, runtime-nodes enrollment). Only failures are counted:
+ * an attempt is refused once its client key or the whole process reached the
+ * failure budget inside the window, so spraying from many addresses still hits
+ * the global cap. Memory is bounded — at most `maxTrackedKeys` client keys are
+ * tracked and refused attempts are never recorded.
+ */
+export function createFailureRateLimiter(options: {
+  windowMs: number;
+  maxFailuresPerKey: number;
+  maxFailuresGlobal: number;
+  maxTrackedKeys?: number;
+  now?: () => number;
+}): FailureRateLimiter {
+  const now = options.now ?? Date.now;
+  const maxTrackedKeys = options.maxTrackedKeys ?? 1000;
+  const failuresByKey = new Map<string, number[]>();
+  let globalFailures: number[] = [];
+
+  const withinWindow = (timestamps: number[], at: number): number[] =>
+    timestamps.filter((timestamp) => at - timestamp < options.windowMs);
+  const retryAfter = (timestamps: number[], at: number): number =>
+    timestamps.length > 0 ? Math.max(1, options.windowMs - (at - timestamps[0])) : 0;
+
+  return {
+    check(clientKey) {
+      const at = now();
+      globalFailures = withinWindow(globalFailures, at);
+      const keyFailures = withinWindow(failuresByKey.get(clientKey) ?? [], at);
+      if (keyFailures.length > 0) {
+        failuresByKey.set(clientKey, keyFailures);
+      } else {
+        failuresByKey.delete(clientKey);
+      }
+
+      if (keyFailures.length >= options.maxFailuresPerKey) {
+        return { allowed: false, retryAfterMs: retryAfter(keyFailures, at) };
+      }
+      if (globalFailures.length >= options.maxFailuresGlobal) {
+        return { allowed: false, retryAfterMs: retryAfter(globalFailures, at) };
+      }
+      return { allowed: true, retryAfterMs: 0 };
+    },
+
+    recordFailure(clientKey) {
+      const at = now();
+      globalFailures = withinWindow(globalFailures, at);
+      globalFailures.push(at);
+      const keyFailures = withinWindow(failuresByKey.get(clientKey) ?? [], at);
+      keyFailures.push(at);
+      // Re-inserting keeps Map order = recency, so eviction drops the stalest key.
+      failuresByKey.delete(clientKey);
+      failuresByKey.set(clientKey, keyFailures);
+      while (failuresByKey.size > maxTrackedKeys) {
+        const stalest = failuresByKey.keys().next().value;
+        if (stalest === undefined) {
+          break;
+        }
+        failuresByKey.delete(stalest);
+      }
+    },
+
+    reset(clientKey) {
+      failuresByKey.delete(clientKey);
+    },
+  };
+}
+
+/**
+ * Address of the TCP peer, for rate limiting. Forwarding headers are ignored on
+ * purpose because any client can forge them; behind a local TLS terminator
+ * every request shares one key and the global cap still applies. Used by
+ * remote-access and runtime-nodes.
+ */
+export function readRequestClientAddress(request: { socket?: { remoteAddress?: string } | null }): string {
+  return request.socket?.remoteAddress || 'unknown';
+}
+
+// ---------------------------
+//----------------- RUNTIME NODE LINK AUTH UTILITIES ------------
+/**
+ * WebSocket path of the authenticated RuntimeNode link. Accepted by the server
+ * entrypoint's websocket gateway (runtime-nodes) and dialed by node-agent.
+ */
+export const RUNTIME_NODE_LINK_PATH = '/runtime-node-link';
+
+/**
+ * Link protocol version spoken by runtime-nodes and node-agent. A node on
+ * another version stays visible but never executes (`protocol_incompatible`).
+ */
+export const RUNTIME_NODE_LINK_PROTOCOL_VERSION = 1;
+
+/**
+ * Largest difference accepted between a node's signed timestamp and the control
+ * plane clock (runtime-nodes). Nonces are remembered at least this long, so a
+ * captured header can never be replayed inside the window either.
+ */
+export const RUNTIME_NODE_LINK_MAX_CLOCK_SKEW_MS = 120_000;
+
+const RUNTIME_NODE_LINK_AUTH_SCHEME = 'CloudCLI-Node-v1';
+const RUNTIME_NODE_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+const RUNTIME_NODE_NONCE_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+const RUNTIME_NODE_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{16,200}$/;
+
+function buildRuntimeNodeLinkSignedPayload(nodeId: string, timestamp: number, nonce: string, requestPath: string): string {
+  return `${RUNTIME_NODE_LINK_AUTH_SCHEME}\n${nodeId}\n${timestamp}\n${nonce}\n${requestPath}`;
+}
+
+/**
+ * Builds the `Authorization` header a RuntimeNode sends when opening its link
+ * (node-agent): an Ed25519 signature over the scheme, node id, timestamp, a
+ * fresh random nonce and the request path. The private key never leaves the
+ * node, and nothing in the header is reusable once the control plane has seen
+ * its nonce.
+ */
+export function signRuntimeNodeLinkRequest(input: {
+  nodeId: string;
+  privateKeyPem: string;
+  path: string;
+  timestamp?: number;
+  nonce?: string;
+}): string {
+  const timestamp = input.timestamp ?? Date.now();
+  const nonce = input.nonce ?? randomBytes(18).toString('base64url');
+  const payload = Buffer.from(buildRuntimeNodeLinkSignedPayload(input.nodeId, timestamp, nonce, input.path), 'utf8');
+  const signature = sign(null, payload, createPrivateKey(input.privateKeyPem)).toString('base64url');
+  return `${RUNTIME_NODE_LINK_AUTH_SCHEME} node=${input.nodeId},ts=${timestamp},nonce=${nonce},sig=${signature}`;
+}
+
+/**
+ * Strictly parses a node link `Authorization` header (runtime-nodes). Any
+ * missing, duplicated, unknown or malformed field yields null. Parsing proves
+ * nothing: the caller must still verify the signature, clock window and nonce.
+ */
+export function parseRuntimeNodeLinkAuthorization(header: unknown): ParsedRuntimeNodeLinkAuthorization | null {
+  const prefix = `${RUNTIME_NODE_LINK_AUTH_SCHEME} `;
+  if (typeof header !== 'string' || header.length > 512 || !header.startsWith(prefix)) {
+    return null;
+  }
+
+  const fields = new Map<string, string>();
+  for (const part of header.slice(prefix.length).split(',')) {
+    const separator = part.indexOf('=');
+    if (separator <= 0) {
+      return null;
+    }
+    const key = part.slice(0, separator).trim();
+    if (fields.has(key)) {
+      return null;
+    }
+    fields.set(key, part.slice(separator + 1).trim());
+  }
+
+  const nodeId = fields.get('node') ?? '';
+  const timestamp = fields.get('ts') ?? '';
+  const nonce = fields.get('nonce') ?? '';
+  const signature = fields.get('sig') ?? '';
+  if (
+    fields.size !== 4
+    || !RUNTIME_NODE_ID_PATTERN.test(nodeId)
+    || !/^\d{1,16}$/.test(timestamp)
+    || !RUNTIME_NODE_NONCE_PATTERN.test(nonce)
+    || !RUNTIME_NODE_SIGNATURE_PATTERN.test(signature)
+  ) {
+    return null;
+  }
+
+  return { nodeId, timestamp: Number(timestamp), nonce, signature };
+}
+
+/**
+ * Verifies a parsed node link signature against the node's enrolled Ed25519
+ * public key for the requested path (runtime-nodes). It checks neither the
+ * clock window nor nonce reuse; the caller must. Any key or signature error
+ * reads as a failed verification.
+ */
+export function verifyRuntimeNodeLinkSignature(
+  parsed: ParsedRuntimeNodeLinkAuthorization,
+  publicKeyPem: string,
+  requestPath: string,
+): boolean {
+  try {
+    const publicKey = createPublicKey(publicKeyPem);
+    if (publicKey.asymmetricKeyType !== 'ed25519') {
+      return false;
+    }
+    const payload = Buffer.from(
+      buildRuntimeNodeLinkSignedPayload(parsed.nodeId, parsed.timestamp, parsed.nonce, requestPath),
+      'utf8',
+    );
+    return verify(null, payload, publicKey, Buffer.from(parsed.signature, 'base64url'));
+  } catch {
+    return false;
+  }
 }

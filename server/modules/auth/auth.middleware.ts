@@ -1,6 +1,7 @@
 // @ts-nocheck -- JWT request augmentation is narrowed by Auth route contracts.
 import jwt from 'jsonwebtoken';
 
+import { isRemoteTransport } from '@/modules/remote-access/index.js';
 import { IS_PLATFORM } from '@/shared/utils.js';
 
 import { userDb, appConfigDb } from '../database/index.js';
@@ -24,6 +25,20 @@ const validateApiKey = (req, res, next) => {
 
 // JWT authentication middleware
 const authenticateToken = async (req, res, next) => {
+  // Remote Gateway (FT-M08): the remote request guard already resolved the
+  // HttpOnly remote session cookie. Bearer tokens and `?token=` are never
+  // accepted on this transport, and platform mode never applies to it.
+  if (isRemoteTransport(req)) {
+    if (req.user) {
+      return next();
+    }
+    res.setHeader('X-Auth-Error', 'invalid-token');
+    return res.status(401).json({
+      error: 'Remote session required. Pair this browser again.',
+      code: 'AUTH_REMOTE_SESSION_REQUIRED',
+    });
+  }
+
   // Platform mode:  use single database user
   if (IS_PLATFORM) {
     try {

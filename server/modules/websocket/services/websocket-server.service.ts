@@ -14,6 +14,10 @@ type WebSocketServerDependencies = {
   chat: Parameters<typeof handleChatConnection>[2];
   shell: Parameters<typeof handleShellConnection>[1];
   getPluginPort: Parameters<typeof handlePluginWsProxy>[2];
+  /** Accepted, already-verified RuntimeNode link connections (FT-M08). */
+  handleNodeLinkConnection?: (ws: WebSocket, request: AuthenticatedWebSocketRequest) => void;
+  /** Lets remote access close browser sockets when their remote session is revoked or expires (FT-M08). */
+  onBrowserConnection?: (ws: WebSocket, request: AuthenticatedWebSocketRequest) => void;
 };
 
 /**
@@ -97,6 +101,18 @@ export function createWebSocketServer(
     const incomingRequest = request as AuthenticatedWebSocketRequest;
     const url = incomingRequest.url ?? '/';
     const pathname = new URL(url, 'http://localhost').pathname;
+
+    const nodeLinkPath = dependencies.verifyClient.nodeLink?.path;
+    if (nodeLinkPath && pathname === nodeLinkPath) {
+      if (dependencies.handleNodeLinkConnection) {
+        dependencies.handleNodeLinkConnection(ws, incomingRequest);
+      } else {
+        ws.close();
+      }
+      return;
+    }
+
+    dependencies.onBrowserConnection?.(ws, incomingRequest);
 
     if (pathname === '/shell') {
       handleShellConnection(ws, dependencies.shell);

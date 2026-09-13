@@ -26,6 +26,8 @@ type CliServiceDependencies = {
   updateGlobalPackage(): void;
   startServer(): Promise<void>;
   startBrowserUseMcp(): Promise<void>;
+  /** `cloudcli node ...`: runs this machine as a RuntimeNode (FT-M08). */
+  runNodeAgent?(argumentsList: string[]): Promise<number>;
 };
 
 type ParsedCliArguments = {
@@ -60,7 +62,7 @@ function parseCliArguments(argumentsList: string[]): ParsedCliArguments {
       parsedArguments.command = 'version';
     } else if (!argument.startsWith('-')) {
       parsedArguments.command = argument;
-      if (argument === 'sandbox' || argument === 'runtime') {
+      if (argument === 'sandbox' || argument === 'runtime' || argument === 'node') {
         parsedArguments.remainingArguments = argumentsList.slice(argumentIndex + 1);
         break;
       }
@@ -149,6 +151,7 @@ Commands:
   start            Start the CloudCLI server (default)
   sandbox          Manage Docker sandbox environments
   runtime          Report or stop the local CloudCLI runtime
+  node             Run this machine as a RuntimeNode (enroll, start, status)
   browser-use-mcp  Run Browser MCP stdio server
   status           Show configuration and data locations
   update           Update to the latest version
@@ -252,6 +255,12 @@ export function createCliService(dependencies: CliServiceDependencies): CliAppli
           return dependencies.sandboxService.execute(parsedArguments.remainingArguments);
         case 'runtime':
           return dependencies.runtimeService.execute(parsedArguments.remainingArguments);
+        case 'node':
+          if (!dependencies.runNodeAgent) {
+            dependencies.output.error('RuntimeNode commands are not available in this build.');
+            return 1;
+          }
+          return dependencies.runNodeAgent(parsedArguments.remainingArguments);
         case 'browser-use-mcp':
           await dependencies.startBrowserUseMcp();
           return 0;

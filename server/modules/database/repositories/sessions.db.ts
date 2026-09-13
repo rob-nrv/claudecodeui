@@ -216,6 +216,17 @@ export const sessionsDb = {
   },
 
   /**
+   * Records where the provider transcript of an app session lives. Used by the
+   * RuntimeNode agent (FT-M08), which has no sessions watcher, to serve the
+   * history of runs it executed from its own node-local database.
+   */
+  setJsonlPath(sessionId: string, jsonlPath: string): void {
+    getConnection()
+      .prepare('UPDATE sessions SET jsonl_path = ? WHERE session_id = ?')
+      .run(jsonlPath, sessionId);
+  },
+
+  /**
    * Records the provider-native session id for one app-allocated session.
    *
    * If the filesystem watcher indexed the provider transcript before this

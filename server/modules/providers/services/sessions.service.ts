@@ -278,6 +278,13 @@ export const sessionsService = {
     }
 
     const resolvedRuntimeNodeId = runtimeNodesService.resolveExecutionTarget(runtimeNodeId);
+    // A remote node must honestly be able to run this: Claude only, its own
+    // login (no CloudCLI account crosses machines), and a folder it verified.
+    runtimeNodesService.assertNodeCanRun(resolvedRuntimeNodeId, {
+      provider,
+      claudeProfileId: resolvedClaudeProfileId,
+      projectPath: normalizedProjectPath,
+    });
 
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
@@ -354,6 +361,16 @@ export const sessionsService = {
         offset: options.offset ?? 0,
         limit: options.limit ?? null,
       };
+    }
+
+    // A run executed on a remote RuntimeNode wrote its transcript there; it is
+    // read from that node, never looked for on this machine's disk (FT-M08).
+    if (runtimeNodesService.isRemoteBinding(session.runtime_node_id)) {
+      const remote = await runtimeNodesService.fetchRemoteHistory(session, {
+        limit: options.limit ?? null,
+        offset: options.offset ?? 0,
+      });
+      return { ...remote, messages: remote.messages.map((message) => ({ ...message, sessionId })) };
     }
 
     const provider = session.provider as LLMProvider;

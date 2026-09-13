@@ -21,6 +21,7 @@ import type {
   ProviderPermissionResolution,
   ProviderPermissionScope,
   ProviderRuntimeWriter,
+  RuntimeNodeLinkRunOptions,
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 
@@ -85,10 +86,26 @@ type ProviderRuntimeGateway = {
   getRecentPermissionOutcomesForSession(sessionId: string): unknown[];
 };
 
-type ChatWebSocketDependencies = {
-  /** Central dispatcher for every provider SDK/CLI runtime. */
-  runtime: ProviderRuntimeGateway;
+/**
+ * RuntimeNode routing (FT-M08): where a bound session executes, and the
+ * control plane's handle on runs executing on remote nodes.
+ */
+type RuntimeNodeRouting = {
+  resolveSessionExecution: typeof runtimeNodesService.resolveSessionExecution;
+  remoteExecution: Pick<
+    typeof runtimeNodesService.remoteExecution,
+    'run' | 'abort' | 'resolveToolApproval' | 'getPendingApprovals' | 'getRecentPermissionOutcomes'
+  >;
 };
+
+type ChatWebSocketDependencies = {
+  /** Central dispatcher for every provider SDK/CLI runtime on this machine. */
+  runtime: ProviderRuntimeGateway;
+  /** Defaults to the runtime-nodes module; injectable for routing tests. */
+  runtimeNodes?: RuntimeNodeRouting;
+};
+
+const MAX_REMOTE_OPTION_STRING = 200;
 
 /**
  * Extracts the authenticated request user id in the formats currently produced
@@ -130,7 +147,8 @@ function sendProtocolError(
   ws: WebSocket,
   code: string,
   error: string,
-  sessionId?: string
+  sessionId?: string,
+  extra: AnyRecord = {},
 ): void {
   sendJson(ws, {
     kind: 'protocol_error',
@@ -138,6 +156,7 @@ function sendProtocolError(
     error,
     sessionId: sessionId ?? null,
     timestamp: new Date().toISOString(),
+    ...extra,
   });
 }
 
@@ -146,10 +165,33 @@ function readRequiredSessionId(data: AnyRecord): string | null {
   return sessionId.length > 0 ? sessionId : null;
 }
 
+function readBoundedString(value: unknown, maxLength: number): string | undefined {
+  return typeof value === 'string' && value.trim() && value.length <= maxLength ? value : undefined;
+}
+
 /**
- * Handles `chat.send`: resolves the session row (provider, project path, and
- * provider-native id all come from the database — never from the client),
- * registers the run, and dispatches to the provider runtime.
+ * The only client options forwarded to a remote node: nothing path-like, no
+ * account and no attachment reference ever leaves this server.
+ */
+function pickRemoteRunOptions(options: AnyRecord): RuntimeNodeLinkRunOptions {
+  const toolsSettings = options.toolsSettings && typeof options.toolsSettings === 'object' && !Array.isArray(options.toolsSettings)
+    && JSON.stringify(options.toolsSettings).length <= 64_000
+    ? options.toolsSettings
+    : undefined;
+  return {
+    model: readBoundedString(options.model, MAX_REMOTE_OPTION_STRING),
+    effort: readBoundedString(options.effort, 32),
+    permissionMode: readBoundedString(options.permissionMode, 32),
+    toolsSettings,
+    sessionSummary: readBoundedString(options.sessionSummary, MAX_REMOTE_OPTION_STRING),
+  };
+}
+
+/**
+ * Handles `chat.send`: resolves the session row (provider, project path, node
+ * binding and provider-native id all come from the database — never from the
+ * client), registers the run, and dispatches to the provider runtime on this
+ * machine or on the session's own RuntimeNode.
  */
 async function handleChatSend(
   ws: WebSocket,
@@ -157,6 +199,7 @@ async function handleChatSend(
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): Promise<void> {
+  const routing = dependencies.runtimeNodes ?? runtimeNodesService;
   const sessionId = readRequiredSessionId(data);
   if (!sessionId) {
     sendProtocolError(ws, 'SESSION_ID_REQUIRED', 'chat.send requires a sessionId.');
@@ -199,17 +242,31 @@ async function handleChatSend(
     claudeProfileId = session.claude_profile_id;
   }
 
-  // A session bound to a RuntimeNode only ever executes on that node. This
-  // server runs its own node's sessions only, so a foreign binding halts here
-  // instead of silently executing on another machine. Never-recorded (legacy)
-  // bindings keep running locally exactly as before (FT-M07).
-  const runtimeCheck = runtimeNodesService.checkSessionRunsHere(session.runtime_node_id);
-  if (!runtimeCheck.ok) {
+  // A session bound to a RuntimeNode only ever executes on that node. An
+  // unusable bound node halts here with the reason and the nodes the user may
+  // choose explicitly (by a handoff) — nothing is ever substituted. Legacy
+  // (never recorded) bindings keep running locally exactly as before.
+  const target = routing.resolveSessionExecution(session);
+  if (target.kind === 'refused') {
+    sendProtocolError(ws, target.code, target.message, sessionId, { alternatives: target.alternatives });
+    return;
+  }
+
+  const clientOptions = (data.options ?? {}) as AnyRecord;
+  const command = typeof data.content === 'string' ? data.content : '';
+
+  const attachmentCandidates = [
+    ...normalizeAttachmentDescriptors(clientOptions.images),
+    ...normalizeAttachmentDescriptors(clientOptions.files),
+    ...normalizeAttachmentDescriptors(clientOptions.attachments),
+  ];
+  if (target.kind === 'remote' && attachmentCandidates.length > 0) {
+    // Uploaded files live on this server's disk; a remote node cannot read them.
     sendProtocolError(
       ws,
-      runtimeCheck.code,
-      'This session is bound to another runtime node and cannot run on this one.',
-      sessionId
+      'RUNTIME_NODE_ATTACHMENTS_UNSUPPORTED',
+      `Attachments cannot be sent to "${target.nodeLabel}" yet. Send the message without attachments.`,
+      sessionId,
     );
     return;
   }
@@ -232,9 +289,6 @@ async function handleChatSend(
     return;
   }
 
-  const clientOptions = (data.options ?? {}) as AnyRecord;
-  const command = typeof data.content === 'string' ? data.content : '';
-
   // Record what this turn runs with so reopening the session later restores the
   // same model and reasoning effort, and so the resume path has a
   // session-scoped model answer to use.
@@ -245,11 +299,35 @@ async function handleChatSend(
     providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
   }
 
-  const attachmentCandidates = [
-    ...normalizeAttachmentDescriptors(clientOptions.images),
-    ...normalizeAttachmentDescriptors(clientOptions.files),
-    ...normalizeAttachmentDescriptors(clientOptions.attachments),
-  ];
+  if (target.kind === 'remote') {
+    let completion: { exitCode: number; aborted?: boolean } = { exitCode: 1 };
+    try {
+      const result = await routing.remoteExecution.run({
+        nodeId: target.nodeId,
+        nodeLabel: target.nodeLabel,
+        appSessionId: sessionId,
+        projectPath: target.projectPath,
+        providerSessionId: session.provider_session_id,
+        command,
+        cwd: target.cwd,
+        options: pickRemoteRunOptions(clientOptions),
+        writer: run.writer,
+        userId,
+      });
+      // An aborted remote run ends exactly like a locally aborted one, whichever
+      // of its own end or the cancel acknowledgement reached this server first.
+      completion = result.outcome === 'aborted'
+        ? { exitCode: 0, aborted: true }
+        : { exitCode: result.outcome === 'completed' ? 0 : 1 };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[Chat] Remote run dispatch failed', { sessionId, nodeId: target.nodeId, error: message });
+    } finally {
+      chatRunRegistry.completeRunIfCurrent(run, completion);
+    }
+    return;
+  }
+
   const verifiedAttachments = filterAttachmentsToUploadStore(attachmentCandidates);
   const uniqueAttachments = verifiedAttachments.filter(
     (descriptor, index, all) => all.findIndex((candidate) => candidate.path === descriptor.path) === index,
@@ -292,6 +370,20 @@ async function handleChatSend(
 }
 
 /**
+ * Interrupts the session's run wherever it executes: on its remote node when
+ * one owns the run, otherwise through the local provider runtime.
+ */
+async function interruptRun(
+  sessionId: string,
+  provider: LLMProvider,
+  dependencies: ChatWebSocketDependencies,
+): Promise<boolean> {
+  const routing = dependencies.runtimeNodes ?? runtimeNodesService;
+  const remoteAborted = await routing.remoteExecution.abort(sessionId);
+  return remoteAborted ?? dependencies.runtime.abort(provider, sessionId);
+}
+
+/**
  * Handles `chat.abort`: cancels the run for one app session and emits the
  * terminal `complete` on its behalf (runtimes skip their own complete for
  * aborted runs, and the registry drops any duplicate).
@@ -313,7 +405,7 @@ async function handleChatAbort(
     return;
   }
 
-  const success = await dependencies.runtime.abort(run.provider, sessionId);
+  const success = await interruptRun(sessionId, run.provider, dependencies);
 
   chatRunRegistry.completeRun(sessionId, {
     exitCode: success ? 0 : 1,
@@ -333,10 +425,10 @@ async function handleChatAbort(
  * run whether or not the provider's interrupt call itself reports success" —
  * a stalled provider process must never wedge Steer), and the dispatch half
  * is a literal `handleChatSend` call, so a steered send is indistinguishable
- * from a normal one to every downstream concern (provider/profile
+ * from a normal one to every downstream concern (provider/profile/node
  * resolution, model/effort persistence, attachment validation) — nothing
  * here ever writes to `queued_messages`, and no new session is created; this
- * is the same session, same native id, continued.
+ * is the same session, same native id, continued on the same node.
  */
 async function handleChatSteer(
   ws: WebSocket,
@@ -358,7 +450,7 @@ async function handleChatSteer(
     return;
   }
 
-  const interrupted = await dependencies.runtime.abort(run.provider, sessionId);
+  const interrupted = await interruptRun(sessionId, run.provider, dependencies);
   chatRunRegistry.completeRun(sessionId, {
     exitCode: interrupted ? 0 : 1,
     aborted: true,
@@ -380,6 +472,7 @@ function handleChatSubscribe(
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): void {
+  const routing = dependencies.runtimeNodes ?? runtimeNodesService;
   const targets = Array.isArray(data.sessions) ? data.sessions : [];
 
   for (const target of targets) {
@@ -409,11 +502,18 @@ function handleChatSubscribe(
     }
 
     // Pending approvals are tracked under the app session id inside the
-    // Claude runtime, so they can be looked up directly.
-    const pendingPermissions = dependencies.runtime.getPendingApprovalsForSession(sessionId);
+    // local Claude runtime, and by the remote execution service for runs on
+    // other nodes (from the events those nodes streamed).
+    const pendingPermissions = [
+      ...dependencies.runtime.getPendingApprovalsForSession(sessionId),
+      ...routing.remoteExecution.getPendingApprovals(sessionId),
+    ];
     // Recently settled approvals let a reconnecting client tell answered,
     // expired, and cancelled requests apart instead of guessing from absence.
-    const recentPermissionOutcomes = dependencies.runtime.getRecentPermissionOutcomesForSession(sessionId);
+    const recentPermissionOutcomes = [
+      ...dependencies.runtime.getRecentPermissionOutcomesForSession(sessionId),
+      ...routing.remoteExecution.getRecentPermissionOutcomes(sessionId),
+    ];
 
     sendJson(ws, {
       kind: 'chat_subscribed',
@@ -439,34 +539,33 @@ function handleChatSubscribe(
 
 /**
  * Handles `chat.permission-response`: forwards a tool-approval decision to the
- * pending approval resolver (Claude is the only provider with interactive
- * approvals today, but the message is intentionally provider-neutral).
+ * pending approval resolver — the remote node that owns the request when a
+ * remote run raised it, otherwise the local provider runtimes.
  *
  * Always acknowledges to the answering socket — that socket is not
  * necessarily the one the run streams to — so the client can leave its
  * "sending" state: accepted, or rejected with why (already answered, expired,
  * cancelled, unknown, or belonging to another session).
  */
-function handlePermissionResponse(
+async function handlePermissionResponse(
   ws: WebSocket,
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
-): void {
+): Promise<void> {
   if (typeof data.requestId !== 'string' || data.requestId.length === 0) {
     return;
   }
 
+  const routing = dependencies.runtimeNodes ?? runtimeNodesService;
   const sessionId = readRequiredSessionId(data);
-  const resolution = dependencies.runtime.resolveToolApproval(
-    data.requestId,
-    {
-      allow: Boolean(data.allow),
-      updatedInput: data.updatedInput,
-      message: typeof data.message === 'string' ? data.message : undefined,
-      rememberEntry: data.rememberEntry,
-    },
-    { sessionId },
-  );
+  const decision: ProviderPermissionDecision = {
+    allow: Boolean(data.allow),
+    updatedInput: data.updatedInput,
+    message: typeof data.message === 'string' ? data.message : undefined,
+    rememberEntry: data.rememberEntry,
+  };
+  const remoteResolution = await routing.remoteExecution.resolveToolApproval(data.requestId, decision, { sessionId });
+  const resolution = remoteResolution ?? dependencies.runtime.resolveToolApproval(data.requestId, decision, { sessionId });
 
   sendJson(ws, {
     kind: 'permission_response_ack',
@@ -484,6 +583,7 @@ function handlePermissionResponse(
  * Inbound protocol (client to server):
  * - `chat.send`                { sessionId, content, options? }
  * - `chat.abort`               { sessionId }
+ * - `chat.steer`               { sessionId, content, options? }
  * - `chat.subscribe`           { sessions: [{ sessionId, lastSeq? }] }
  * - `chat.permission-response` { requestId, sessionId, allow, updatedInput?, message?, rememberEntry? }
  *
@@ -526,7 +626,7 @@ export function handleChatConnection(
           handleChatSubscribe(ws, data, dependencies);
           return;
         case 'chat.permission-response':
-          handlePermissionResponse(ws, data, dependencies);
+          await handlePermissionResponse(ws, data, dependencies);
           return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);

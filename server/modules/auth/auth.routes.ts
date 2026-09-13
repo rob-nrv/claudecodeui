@@ -12,12 +12,15 @@ type AuthenticatedRequest = express.Request & { user?: unknown };
 export function createAuthRouter(
   service: ReturnType<typeof createAuthService>,
   authenticateToken: RequestHandler,
+  resolveTransport: (req: express.Request) => 'local' | 'remote' = () => 'local',
 ): express.Router {
   const router = express.Router();
 
-  router.get('/status', (_req, res, next) => {
+  router.get('/status', (req, res, next) => {
     try {
-      res.json(service.getStatus());
+      // `transport` tells the client which session mechanism applies: a bearer
+      // token locally, or the HttpOnly remote session cookie (FT-M08).
+      res.json({ ...service.getStatus(), transport: resolveTransport(req) });
     } catch (error) {
       next(error);
     }
