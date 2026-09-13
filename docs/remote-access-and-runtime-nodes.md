@@ -101,9 +101,9 @@ Paired browsers are listed in the same place. **Revoke** signs one out everywher
    cloudcli node start --workspace-root /volume1/code
    ```
 
-The node connects out to the gateway and never opens a port. It stores its key in `~/.cloudcli/node-agent/credential.json`; override the location with `--state-dir` or `CLOUDCLI_NODE_AGENT_HOME`.
+The node connects out to the gateway and never opens a port. It stores its key in `~/.cloudcli/node-agent/credential.json`; override the location with `--state-dir` or `CLOUDCLI_NODE_AGENT_HOME`. Enrolling again in the same state directory is refused unless you pass `--force`, which replaces that directory's credential (the old node keeps its identity on the control plane; revoke it there).
 
-`cloudcli node status` shows the node's identity. A node on the control plane machine itself may use `--server http://127.0.0.1:3001`. Any other machine must use https.
+`cloudcli node status` shows the node's identity. `cloudcli node doctor` checks what the node can prove right now (toolchain, Claude login, workspace write, governor, run journal, control plane reachability) without opening a link or calling a model; add `--json` or `--output <file>` for a non-secret evidence record ([android-runtime-node.md](android-runtime-node.md)). A node on the control plane machine itself may use `--server http://127.0.0.1:3001`. Any other machine must use https.
 
 If the gateway uses a private CA, trust it on the node with the standard `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`. TLS verification is never disabled.
 
