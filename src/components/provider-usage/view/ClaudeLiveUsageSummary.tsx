@@ -7,8 +7,10 @@ import { api } from '../../../utils/api';
 import {
   formatUsedPercentage,
   getBridgeAction,
+  getCaptureAge,
   getResetHint,
   getUsageLevel,
+  type CaptureAge,
   type ClaudeLiveUsage,
   type ClaudeLiveUsageWindow,
   type UsageLevel,
@@ -19,27 +21,40 @@ type ClaudeLiveUsageSummaryProps = {
   claudeProfileId: string | null;
 };
 
+type Translate = ReturnType<typeof useTranslation>['t'];
+
 const LEVEL_CLASS: Record<UsageLevel, string> = {
   normal: 'text-foreground',
   elevated: 'text-amber-700 dark:text-amber-400',
   high: 'text-red-700 dark:text-red-400',
 };
 
-const MINUTE_MS = 60_000;
-
 async function readLiveUsageResponse(response: Response): Promise<ClaudeLiveUsage> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(body?.error?.message || `Live usage request failed (${response.status})`);
+    throw new Error(body?.error?.message || `Usage request failed (${response.status})`);
   }
   if (!body?.data?.liveUsage) {
-    throw new Error('Malformed live usage response');
+    throw new Error('Malformed usage response');
   }
   return body.data.liveUsage as ClaudeLiveUsage;
 }
 
+function formatCaptureAge(t: Translate, age: CaptureAge): string {
+  switch (age.kind) {
+    case 'justNow':
+      return t('claudeProfiles.liveUsage.ageJustNow', { defaultValue: 'just now' });
+    case 'minutes':
+      return t('claudeProfiles.liveUsage.ageMinutes', { count: age.minutes, defaultValue: '{{count}} min ago' });
+    case 'hours':
+      return t('claudeProfiles.liveUsage.ageHours', { count: age.hours, defaultValue: '{{count}} h ago' });
+    default:
+      return t('claudeProfiles.liveUsage.ageDays', { count: age.days, defaultValue: '{{count}} d ago' });
+  }
+}
+
 function UsageWindow({ label, window, now }: { label: string; window: ClaudeLiveUsageWindow; now: number }) {
-  const { t } = useTranslation('settings');
+  const { t, i18n } = useTranslation('settings');
 
   if (window.state !== 'available') {
     return (
@@ -60,14 +75,17 @@ function UsageWindow({ label, window, now }: { label: string; window: ClaudeLive
   if (hint?.kind === 'minutes') {
     resetText = t('claudeProfiles.liveUsage.resetsInMinutes', { minutes: hint.minutes, defaultValue: 'Resets in {{minutes}} min' });
   } else if (hint?.kind === 'hours') {
-    resetText = t('claudeProfiles.liveUsage.resetsInHours', {
-      hours: hint.hours,
-      minutes: hint.minutes,
-      defaultValue: 'Resets in {{hours}} h {{minutes}} min',
-    });
+    resetText = hint.minutes === 0
+      ? t('claudeProfiles.liveUsage.resetsInHoursOnly', { hours: hint.hours, defaultValue: 'Resets in {{hours}} h' })
+      : t('claudeProfiles.liveUsage.resetsInHours', {
+        hours: hint.hours,
+        minutes: hint.minutes,
+        defaultValue: 'Resets in {{hours}} h {{minutes}} min',
+      });
   } else if (hint?.kind === 'date') {
     resetText = t('claudeProfiles.liveUsage.resetsAt', {
-      date: hint.date.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
+      // Formatted in the UI's language, not the browser's, so the line never mixes languages.
+      date: hint.date.toLocaleString(i18n.language || undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
       defaultValue: 'Resets {{date}}',
     });
   }
@@ -85,11 +103,15 @@ function UsageWindow({ label, window, now }: { label: string; window: ClaudeLive
 }
 
 /**
- * Compact, backend-authoritative Claude live usage for one account (FT-M07):
- * the 5-hour session window and the 7-day weekly window captured from Claude
- * Code's statusLine, plus the explicit control for the capture bridge. An
- * unavailable window shows why instead of a number; the raw `/usage` check
- * next to it stays available as the fallback.
+ * Compact, backend-authoritative Claude usage limits for one account (FT-M07):
+ * the 5-hour session window and the 7-day weekly window as last reported by
+ * Claude Code's statusLine, plus the explicit control for the capture bridge.
+ *
+ * Only interactive Claude Code sessions report these values — CloudCLI's
+ * SDK-driven chats do not (FT-M07-R1) — so the block always says when the last
+ * report happened instead of presenting it as a live reading. An unavailable
+ * window shows why instead of a number; the raw `/usage` check next to it stays
+ * available as the fallback.
  */
 export default function ClaudeLiveUsageSummary({ claudeProfileId }: ClaudeLiveUsageSummaryProps) {
   const { t } = useTranslation('settings');
@@ -122,34 +144,32 @@ export default function ClaudeLiveUsageSummary({ claudeProfileId }: ClaudeLiveUs
   }
 
   const action = getBridgeAction(usage.bridge.state);
-  const capturedAge = usage.snapshot.capturedAt
-    ? Math.max(0, Math.round((now - Date.parse(usage.snapshot.capturedAt)) / MINUTE_MS))
-    : null;
+  const captureAge = usage.snapshot.status === 'available' ? getCaptureAge(usage.snapshot.capturedAt, now) : null;
+  const isStale = usage.snapshot.status === 'available' && usage.snapshot.freshness === 'stale';
 
-  let snapshotText: string;
-  if (usage.snapshot.status === 'available' && capturedAge !== null) {
-    snapshotText = usage.snapshot.freshness === 'stale'
-      ? t('claudeProfiles.liveUsage.staleCapture', { minutes: capturedAge, defaultValue: 'Stale · last update {{minutes}} min ago' })
-      : t('claudeProfiles.liveUsage.freshCapture', { minutes: capturedAge, defaultValue: 'Updated {{minutes}} min ago' });
-  } else if (usage.snapshot.reason === 'no_snapshot') {
-    snapshotText = action === 'enable'
-      ? t('claudeProfiles.liveUsage.noSnapshotDisabled', { defaultValue: 'Not captured yet.' })
-      : t('claudeProfiles.liveUsage.noSnapshot', { defaultValue: 'Appears after a Claude response in an interactive Claude Code session for this account.' });
+  let reportText: string;
+  if (captureAge) {
+    const age = formatCaptureAge(t, captureAge);
+    reportText = isStale
+      ? t('claudeProfiles.liveUsage.staleReport', { age, defaultValue: 'Stale · last reported {{age}}' })
+      : t('claudeProfiles.liveUsage.freshReport', { age, defaultValue: 'Reported by Claude Code {{age}}' });
   } else if (usage.snapshot.reason === 'attribution_mismatch') {
-    snapshotText = t('claudeProfiles.liveUsage.attributionMismatch', { defaultValue: 'The last capture belongs to another account and was ignored.' });
+    reportText = t('claudeProfiles.liveUsage.attributionMismatch', { defaultValue: 'The last report belongs to another account and was ignored.' });
+  } else if (usage.snapshot.reason === 'snapshot_invalid' || usage.snapshot.reason === 'snapshot_from_future') {
+    reportText = t('claudeProfiles.liveUsage.invalidSnapshot', { defaultValue: 'The last report could not be trusted and was ignored.' });
   } else {
-    snapshotText = t('claudeProfiles.liveUsage.invalidSnapshot', { defaultValue: 'The last capture could not be trusted and was ignored.' });
+    reportText = t('claudeProfiles.liveUsage.noReportYet', { defaultValue: 'No report yet' });
   }
 
   let bridgeText: string;
   if (action === 'enable') {
     bridgeText = usage.bridge.hasUserStatusLine
-      ? t('claudeProfiles.liveUsage.enableWrapsExisting', { defaultValue: 'Your existing status line is kept: CloudCLI runs it after reading the usage.' })
-      : t('claudeProfiles.liveUsage.enableAddsStatusLine', { defaultValue: 'Adds a status line to Claude Code for this account, which hides its footer shortcut hints.' });
+      ? t('claudeProfiles.liveUsage.enableWrapsExisting', { defaultValue: 'Reads usage from interactive Claude Code sessions for this account. Your existing status line keeps running.' })
+      : t('claudeProfiles.liveUsage.enableAddsStatusLine', { defaultValue: 'Reads usage from interactive Claude Code sessions for this account. Adds a status line there, which hides its footer shortcut hints.' });
   } else if (action === 'disable') {
     bridgeText = usage.bridge.wrapsExistingStatusLine
-      ? t('claudeProfiles.liveUsage.capturingWrapped', { defaultValue: 'Capturing from Claude Code. Your status line still runs.' })
-      : t('claudeProfiles.liveUsage.capturing', { defaultValue: 'Capturing from Claude Code\'s status line.' });
+      ? t('claudeProfiles.liveUsage.capturingWrapped', { defaultValue: 'Updates only while this account uses Claude Code interactively; CloudCLI chats don\'t report usage. Your status line still runs.' })
+      : t('claudeProfiles.liveUsage.capturing', { defaultValue: 'Updates only while this account uses Claude Code interactively; CloudCLI chats don\'t report usage.' });
   } else if (action === 'repair') {
     bridgeText = t('claudeProfiles.liveUsage.needsRepair', { defaultValue: 'The usage bridge needs to be repaired before it can run.' });
   } else {
@@ -158,13 +178,13 @@ export default function ClaudeLiveUsageSummary({ claudeProfileId }: ClaudeLiveUs
 
   return (
     <div className="mt-3 rounded-md border border-border/50 bg-background/40 px-2.5 py-2 text-xs">
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 font-medium text-foreground">
-          <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
-          {t('claudeProfiles.liveUsage.title', { defaultValue: 'Live usage' })}
-        </span>
-        <span className="truncate text-[11px] text-muted-foreground">{snapshotText}</span>
+      <div className="flex items-center gap-1.5 font-medium text-foreground">
+        <Gauge className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        {t('claudeProfiles.liveUsage.title', { defaultValue: 'Usage limits' })}
       </div>
+      <p className={`mt-0.5 text-[11px] ${isStale ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>
+        {reportText}
+      </p>
 
       <dl className="mt-1.5 grid grid-cols-2 gap-2">
         <UsageWindow label={t('claudeProfiles.liveUsage.fiveHour', { defaultValue: 'Session 5 h' })} window={usage.fiveHour} now={now} />
@@ -175,7 +195,7 @@ export default function ClaudeLiveUsageSummary({ claudeProfileId }: ClaudeLiveUs
         <span className="min-w-0 flex-1 text-[11px] text-muted-foreground">{bridgeText}</span>
         {action === 'enable' && (
           <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pending} onClick={() => void run(() => api.claudeLiveUsage.enableBridge(claudeProfileId))}>
-            {t('claudeProfiles.liveUsage.enable', { defaultValue: 'Enable live usage' })}
+            {t('claudeProfiles.liveUsage.enable', { defaultValue: 'Enable' })}
           </Button>
         )}
         {action === 'repair' && (

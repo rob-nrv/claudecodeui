@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   formatUsedPercentage,
   getBridgeAction,
+  getCaptureAge,
   getResetHint,
   getUsageLevel,
 } from './liveUsage';
@@ -35,6 +36,16 @@ test('reset hints are relative when near, absolute when far, and absent once pas
 
   assert.equal(getResetHint(new Date(NOW - 1).toISOString(), NOW), null);
   assert.equal(getResetHint('not a date', NOW), null);
+});
+
+test('capture age reads coarsely, never goes negative, and is absent without a capture time', () => {
+  assert.equal(getCaptureAge(null, NOW), null);
+  assert.equal(getCaptureAge('not a date', NOW), null);
+  assert.deepEqual(getCaptureAge(new Date(NOW + 5_000).toISOString(), NOW), { kind: 'justNow' });
+  assert.deepEqual(getCaptureAge(new Date(NOW - 30_000).toISOString(), NOW), { kind: 'justNow' });
+  assert.deepEqual(getCaptureAge(new Date(NOW - 7 * 60_000).toISOString(), NOW), { kind: 'minutes', minutes: 7 });
+  assert.deepEqual(getCaptureAge(new Date(NOW - 5 * 3_600_000).toISOString(), NOW), { kind: 'hours', hours: 5 });
+  assert.deepEqual(getCaptureAge(new Date(NOW - 3 * 86_400_000).toISOString(), NOW), { kind: 'days', days: 3 });
 });
 
 test('each bridge state offers exactly one truthful action', () => {

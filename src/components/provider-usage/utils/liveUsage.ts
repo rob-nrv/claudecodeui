@@ -1,11 +1,16 @@
 /**
- * Framework-free presentation rules for Claude live usage (FT-M07).
+ * Framework-free presentation rules for Claude usage limits (FT-M07).
  *
  * The backend (`GET /api/claude-profiles/:id/live-usage`) is the only source of
  * truth: it has already decided whether each window is available, reset or
  * unreported, and whether the snapshot is fresh or stale. These helpers only
  * turn that decision into display data. They never produce a percentage for a
  * window the backend reported as unavailable.
+ *
+ * Contract (FT-M07-R1): the values come only from Claude Code's statusLine,
+ * which runs in interactive Claude Code sessions. SDK/headless runs — every
+ * CloudCLI chat — do not report them, so a snapshot is a last report with an
+ * age, never a continuously live reading.
  */
 
 export type ClaudeLiveUsageWindow =
@@ -42,6 +47,12 @@ export type ResetHint =
   | { kind: 'minutes'; minutes: number }
   | { kind: 'hours'; hours: number; minutes: number }
   | { kind: 'date'; date: Date };
+
+export type CaptureAge =
+  | { kind: 'justNow' }
+  | { kind: 'minutes'; minutes: number }
+  | { kind: 'hours'; hours: number }
+  | { kind: 'days'; days: number };
 
 /** What the account row offers for the capture bridge. */
 export type BridgeAction = 'enable' | 'disable' | 'repair' | 'none';
@@ -93,6 +104,33 @@ export function getResetHint(resetsAt: string, now: number): ResetHint | null {
     return { kind: 'hours', hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 };
   }
   return { kind: 'date', date: new Date(resetTime) };
+}
+
+/**
+ * How long ago Claude Code last reported usage, coarse enough to read at a
+ * glance ("3 d ago" rather than "4320 min ago"). Null when the capture time is
+ * missing or unreadable; a capture time slightly ahead of this device's clock
+ * reads as "just now" rather than as a negative age.
+ */
+export function getCaptureAge(capturedAt: string | null, now: number): CaptureAge | null {
+  if (!capturedAt) {
+    return null;
+  }
+  const captured = Date.parse(capturedAt);
+  if (Number.isNaN(captured)) {
+    return null;
+  }
+  const elapsed = Math.max(0, now - captured);
+  if (elapsed < MINUTE_MS) {
+    return { kind: 'justNow' };
+  }
+  if (elapsed < HOUR_MS) {
+    return { kind: 'minutes', minutes: Math.floor(elapsed / MINUTE_MS) };
+  }
+  if (elapsed < DAY_MS) {
+    return { kind: 'hours', hours: Math.floor(elapsed / HOUR_MS) };
+  }
+  return { kind: 'days', days: Math.floor(elapsed / DAY_MS) };
 }
 
 /** Maps the backend bridge state to the single action the row should offer. */
