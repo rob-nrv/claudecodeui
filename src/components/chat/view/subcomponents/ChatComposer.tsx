@@ -314,6 +314,8 @@ export default function ChatComposer({
     : sendByCtrlEnter
       ? t('input.hintText.ctrlEnter')
       : t('input.hintText.enter');
+  // Hints are "•"-separated phrases in every locale; splitting lets the footer drop whole phrases.
+  const submitHintSegments = submitHint.split('•').map((segment) => segment.trim()).filter(Boolean);
   const submitAriaLabel = canQueueDraft
     ? hasQueuedDraft
       ? t('input.queue.update', { defaultValue: 'Update queued message' })
@@ -462,8 +464,10 @@ export default function ChatComposer({
             />
         </PromptInputBody>
 
-        <PromptInputFooter>
-          <PromptInputTools className="min-w-0">
+        {/* Tools and actions never shrink below their controls (a shrinking tools row used
+            to spill its buttons under the actions); when both cannot fit, the actions wrap. */}
+        <PromptInputFooter className="flex-wrap gap-y-2">
+          <PromptInputTools className="shrink-0">
             <PromptInputButton
               tooltip={{ content: t('input.attachFiles') }}
               onClick={openAttachmentPicker}
@@ -486,7 +490,7 @@ export default function ChatComposer({
               <MessageSquareIcon />
               {slashCommandsCount > 0 && (
                 <span
-                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
+                  className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-0.5 text-[10px] font-bold text-primary-foreground"
                 >
                   {slashCommandsCount}
                 </span>
@@ -505,15 +509,23 @@ export default function ChatComposer({
 
           </PromptInputTools>
 
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <div
-              className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {submitHint}
-            </div>
+          {/* A single clipped line: hint phrases that do not fit wrap out of view whole,
+              so the hint only ever uses the room the controls leave. */}
+          <div
+            data-slot="composer-hint"
+            title={submitHint}
+            className={`mx-2 hidden h-4 min-w-0 flex-1 basis-0 flex-wrap justify-end gap-x-1 overflow-hidden text-xs leading-4 text-muted-foreground/50 transition-opacity duration-200 lg:flex ${
+              input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
+            }`}
+          >
+            {submitHintSegments.map((segment, index) => (
+              <span key={segment} className="max-w-full truncate">
+                {index > 0 ? `• ${segment}` : segment}
+              </span>
+            ))}
+          </div>
 
+          <div data-slot="composer-actions" className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
             <ComposerModelMenu
               effort={effort}
               effortOptions={availableEffortOptions}
