@@ -34,7 +34,8 @@ type RunCommand = (file: string, args: string[], timeoutMs: number) => Promise<s
  * has no observer, so these stay unknown there.
  */
 export type RuntimeNodeRunObservations = {
-  startedAt: number;
+  /** When suspension observation began; null for a one-shot check that observes nothing over time. */
+  startedAt: number | null;
   lastCompletedRunAt(): number | null;
   lastSuspension(): { at: number; durationMs: number } | null;
 };
@@ -231,7 +232,7 @@ function probeHeadless(observations: RuntimeNodeRunObservations | null, now: num
 }
 
 function probeBackground(observations: RuntimeNodeRunObservations | null, now: number): RuntimeNodeProbeOutcome {
-  if (!observations) {
+  if (!observations || observations.startedAt === null) {
     return { outcome: 'not_probed', reason: 'requires_device_verification' };
   }
   const suspension = observations.lastSuspension();

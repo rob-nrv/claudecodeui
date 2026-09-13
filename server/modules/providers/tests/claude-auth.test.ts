@@ -52,8 +52,12 @@ const withEnv = async (
 
 const withTempHome = async (fn: (homeDir: string) => Promise<void>) => {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'claude-auth-test-'));
+  // os.homedir() reads USERPROFILE on Windows and HOME elsewhere: both must
+  // move, or the real Claude CLI these tests spawn writes into the real home.
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   process.env.HOME = homeDir;
+  process.env.USERPROFILE = homeDir;
   try {
     await fn(homeDir);
   } finally {
@@ -61,6 +65,11 @@ const withTempHome = async (fn: (homeDir: string) => Promise<void>) => {
       delete process.env.HOME;
     } else {
       process.env.HOME = originalHome;
+    }
+    if (originalUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = originalUserProfile;
     }
     await rm(homeDir, { recursive: true, force: true });
   }

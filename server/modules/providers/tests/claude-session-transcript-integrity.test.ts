@@ -100,10 +100,13 @@ test('a profile-bound session\'s full transcript survives restart/resume: both t
     const previousHome = process.env.HOME;
     const fakeHome = await mkdtemp(path.join(tmpdir(), 'claude-legacy-home-'));
     process.env.HOME = fakeHome;
+    // os.homedir() reads USERPROFILE on Windows and HOME elsewhere.
+    const previousUserProfile = process.env.USERPROFILE;
+    process.env.USERPROFILE = fakeHome;
 
     const projectPath = '/home/robin/IslandOS';
     const encodedProjectDir = projectPath.replace(/\//g, '-');
-    const providerSessionId = 'bf4a90d6-7e58-4581-8971-f588c3a085ce';
+    const providerSessionId ='bf4a90d6-7e58-4581-8971-f588c3a085ce';
     const profileConfigDirectory = await mkdtemp(path.join(tmpdir(), 'claude-profile-work-'));
 
     try {
@@ -188,6 +191,11 @@ test('a profile-bound session\'s full transcript survives restart/resume: both t
       } else {
         process.env.HOME = previousHome;
       }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
+      }
       await rm(fakeHome, { recursive: true, force: true });
       await rm(profileConfigDirectory, { recursive: true, force: true });
     }
@@ -199,6 +207,8 @@ test('a Personal-profile session is discovered independently of a Work-profile s
     const previousHome = process.env.HOME;
     const fakeHome = await mkdtemp(path.join(tmpdir(), 'claude-legacy-home-'));
     process.env.HOME = fakeHome;
+    const previousUserProfile = process.env.USERPROFILE;
+    process.env.USERPROFILE = fakeHome;
 
     const projectPath = '/home/robin/IslandOS';
     const encodedProjectDir = projectPath.replace(/\//g, '-');
@@ -258,6 +268,11 @@ test('a Personal-profile session is discovered independently of a Work-profile s
       } else {
         process.env.HOME = previousHome;
       }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
+      }
       await rm(fakeHome, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
       await rm(personalDir, { recursive: true, force: true });
@@ -272,9 +287,11 @@ test('a legacy (no-profile) session\'s discovery is unaffected: still bound only
     const projectPath = '/home/robin/legacy-project';
     const encodedProjectDir = projectPath.replace(/\//g, '-');
     const legacySessionId = 'legacy-provider-session';
+    const previousUserProfile = process.env.USERPROFILE;
 
     try {
       process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
 
       const projectSessionsDir = path.join(fakeHome, '.claude', 'projects', encodedProjectDir);
       await mkdir(projectSessionsDir, { recursive: true });
@@ -297,6 +314,11 @@ test('a legacy (no-profile) session\'s discovery is unaffected: still bound only
         delete process.env.HOME;
       } else {
         process.env.HOME = previousHome;
+      }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
       }
       await rm(fakeHome, { recursive: true, force: true });
     }

@@ -31,8 +31,8 @@ test('accepted ids survive a restart; a run that never finished is marked interr
     await first.flush();
     // The agent dies here: no finish is ever written for `inFlight`.
 
-    assert.deepEqual(await readNodeAgentRunJournalSummary(file), { unfinished: 1, interrupted: 0, lastCompletedAt: 2_000 }, 'status reads without changing anything');
-    assert.deepEqual(await readNodeAgentRunJournalSummary(file), { unfinished: 1, interrupted: 0, lastCompletedAt: 2_000 });
+    assert.deepEqual(await readNodeAgentRunJournalSummary(file), { state: 'ok', unfinished:1, interrupted: 0, lastCompletedAt: 2_000 }, 'status reads without changing anything');
+    assert.deepEqual(await readNodeAgentRunJournalSummary(file), { state: 'ok', unfinished:1, interrupted: 0, lastCompletedAt: 2_000 });
 
     clock = 5_000;
     const restarted = createNodeAgentRunJournal({ file, now: () => clock });
@@ -41,7 +41,7 @@ test('accepted ids survive a restart; a run that never finished is marked interr
     assert.equal(restarted.has(done), true);
     assert.equal(restarted.has(inFlight), true);
     assert.equal(restarted.lastCompletedAt(), 2_000, 'headless evidence comes only from a completed run');
-    assert.deepEqual(await readNodeAgentRunJournalSummary(file), { unfinished: 0, interrupted: 1, lastCompletedAt: 2_000 });
+    assert.deepEqual(await readNodeAgentRunJournalSummary(file), { state: 'ok', unfinished:0, interrupted: 1, lastCompletedAt: 2_000 });
 
     const content = await readFile(file, 'utf8');
     assert.equal(/prompt|command|cwd|token/i.test(content), false, 'only ids, times and outcomes are persisted');

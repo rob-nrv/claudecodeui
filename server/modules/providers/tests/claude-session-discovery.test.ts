@@ -74,9 +74,12 @@ test('claude session sync: discovers an existing project session created after t
   await withIsolatedDatabase(async () => {
     const previousHome = process.env.HOME;
     const fakeHome = await mkdtemp(path.join(tmpdir(), 'claude-home-'));
+    // os.homedir() reads USERPROFILE on Windows and HOME elsewhere.
+    const previousUserProfile = process.env.USERPROFILE;
 
     try {
       process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
 
       const encodedProjectDir = PROJECT_PATH.replace(/\//g, '-');
       const projectSessionsDir = path.join(fakeHome, '.claude', 'projects', encodedProjectDir);
@@ -109,6 +112,11 @@ test('claude session sync: discovers an existing project session created after t
         delete process.env.HOME;
       } else {
         process.env.HOME = previousHome;
+      }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
       }
       await rm(fakeHome, { recursive: true, force: true });
     }

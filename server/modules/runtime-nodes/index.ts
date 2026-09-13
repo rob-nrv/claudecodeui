@@ -11,5 +11,13 @@ export { default as runtimeNodesRoutes } from '@/modules/runtime-nodes/runtime-n
 // runtimeNodeLinkRoutes: mounted by server/index.ts as the public, code-authenticated enrollment endpoint.
 export { default as runtimeNodeLinkRoutes } from '@/modules/runtime-nodes/runtime-node-link.routes.js';
 // probeLocalRuntimeCapabilities / proveDirectoryWritable: used by the node-agent module to answer probe requests about its own machine.
-export { probeLocalRuntimeCapabilities, proveDirectoryWritable } from '@/modules/runtime-nodes/runtime-node-probes.js';
+export { detectAndroidHost, probeLocalRuntimeCapabilities, proveDirectoryWritable } from '@/modules/runtime-nodes/runtime-node-probes.js';
+// Evidence evaluation primitives: used by the node-agent doctor so a local diagnostic reads exactly like the control plane's view.
+export {
+  capabilityVerification,
+  normalizeRuntimeArch,
+  normalizeRuntimePlatform,
+  RUNTIME_NODE_CAPABILITY_IDS,
+  toRuntimeNodeCapability,
+} from '@/modules/runtime-nodes/runtime-node-availability.js';
 export type { RuntimeNodeRunObservations } from '@/modules/runtime-nodes/runtime-node-probes.js';

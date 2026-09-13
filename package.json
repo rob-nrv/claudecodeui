@@ -48,7 +48,7 @@
     "postbuild:server": "node scripts/promote-dist-server.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
-    "test": "tsx --tsconfig server/tsconfig.json --test --experimental-test-module-mocks \"server/**/*.test.ts\" \"server/**/*.test.js\"",
+    "test": "tsx --tsconfig server/tsconfig.json --import ./server/test-support/isolated-test-home.ts --test --experimental-test-module-mocks \"server/**/*.test.ts\" \"server/**/*.test.js\"",
     "test:client": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "lint": "eslint src/ server/",
     "lint:fix": "eslint src/ server/ --fix",

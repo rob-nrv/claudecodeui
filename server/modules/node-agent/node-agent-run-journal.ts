@@ -157,20 +157,29 @@ export type NodeAgentRunJournal = ReturnType<typeof createNodeAgentRunJournal>;
  * Read-only summary for `cloudcli node status`: never marks, prunes or writes,
  * so it is safe while an agent is running.
  */
-export async function readNodeAgentRunJournalSummary(file: string): Promise<{
-  unfinished: number;
-  interrupted: number;
-  lastCompletedAt: number | null;
-} | null> {
+export async function readNodeAgentRunJournalSummary(file: string): Promise<
+  | { state: 'missing' | 'unreadable' }
+  | { state: 'ok'; unfinished: number; interrupted: number; lastCompletedAt: number | null }
+> {
+  let raw: string;
   try {
-    const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
-    const entries = Array.isArray(parsed.entries) ? parsed.entries.map(parseEntry).filter((entry): entry is NodeRunJournalEntry => entry !== null) : [];
+    raw = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    return { state: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable' };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) {
+      return { state: 'unreadable' };
+    }
+    const entries = parsed.entries.map(parseEntry).filter((entry): entry is NodeRunJournalEntry => entry !== null);
     return {
+      state: 'ok',
       unfinished: entries.filter((entry) => entry.finishedAt === null).length,
       interrupted: entries.filter((entry) => entry.outcome === 'interrupted').length,
       lastCompletedAt: typeof parsed.lastCompletedAt === 'number' && Number.isFinite(parsed.lastCompletedAt) ? parsed.lastCompletedAt : null,
     };
   } catch {
-    return null;
+    return { state: 'unreadable' };
   }
 }
