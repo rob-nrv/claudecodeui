@@ -61,6 +61,13 @@ interface UseChatComposerStateArgs {
    * (CLOUDCLI_EXTENSION_PLAN.md F4/F5).
    */
   claudeProfileId?: string | null;
+  /**
+   * The RuntimeNode a brand-new session should be bound to (FT-M07), or null
+   * when none can be implied — the backend then applies its own single-node
+   * rule and refuses when a choice is required. Never read for an existing
+   * session, whose binding lives on the session row.
+   */
+  runtimeNodeId?: string | null;
   permissionMode: PermissionMode | string;
   cyclePermissionMode: () => void;
   resolvePermissionModeForProvider: (provider: LLMProvider, requestedMode: PermissionMode | string) => PermissionMode;
@@ -281,6 +288,7 @@ export function useChatComposerState({
   currentSessionId,
   provider,
   claudeProfileId,
+  runtimeNodeId,
   permissionMode,
   cyclePermissionMode,
   resolvePermissionModeForProvider,
@@ -929,6 +937,10 @@ export function useChatComposerState({
               // resolves and validates it once, at creation, and that
               // binding is permanent (CLOUDCLI_EXTENSION_PLAN.md F4/F5).
               claudeProfileId: provider === 'claude' ? claudeProfileId ?? undefined : undefined,
+              // The runtime node this new Run is bound to when backend truth
+              // implies exactly one; omitted otherwise so the server applies
+              // its own rule instead of a client guess (FT-M07).
+              runtimeNodeId: runtimeNodeId ?? undefined,
             }),
           });
           if (!response.ok) {
@@ -1030,6 +1042,7 @@ export function useChatComposerState({
       buildSendOptions,
       currentSessionId,
       claudeProfileId,
+      runtimeNodeId,
       executeCommand,
       isLoading,
       onSessionProcessing,

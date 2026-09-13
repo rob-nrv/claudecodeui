@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge, Button } from '../../../../../../../shared/view/ui';
 import LLMProviderLogo from '../../../../../../llm-provider-logo/LLMProviderLogo';
+import ClaudeLiveUsageSummary from '../../../../../../provider-usage/view/ClaudeLiveUsageSummary';
 import UsageCheckModal from '../../../../../../usage/view/UsageCheckModal';
 import type { AgentProvider, AuthStatus } from '../../../../../types/types';
 
@@ -122,6 +123,8 @@ export default function AccountContent({ agent, authStatus, onLogin }: AccountCo
               >
                 {t('claudeProfiles.actions.checkUsage')}
               </Button>
+              {/* The historical ~/.claude account has no profile id: null addresses it explicitly (FT-M07). */}
+              <ClaudeLiveUsageSummary claudeProfileId={null} />
             </div>
           )}
 

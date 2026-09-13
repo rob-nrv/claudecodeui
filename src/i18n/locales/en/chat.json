@@ -166,6 +166,17 @@
     },
     "pressToSearch": "Press <kbd>{{shortcut}}</kbd> to search sessions, files, and commits"
   },
+  "runtimeNode": {
+    "runsOn": "Runs on",
+    "statusUnavailable": "Runtime node status unavailable",
+    "noSingleTarget": "No single runtime node to run on",
+    "status": {
+      "available": "Available",
+      "claudeUnavailable": "Claude CLI not found",
+      "notResponding": "Status out of date",
+      "unknown": "Status not checked yet"
+    }
+  },
   "session": {
     "continue": {
       "title": "Continue your conversation",

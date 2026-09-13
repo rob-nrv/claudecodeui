@@ -11,6 +11,8 @@ import type {
 } from "../../../../types/app";
 import type { ClaudeProfile } from "../../../settings/hooks/useClaudeProfiles.types";
 import LLMProviderLogo from "../../../llm-provider-logo/LLMProviderLogo";
+import type { RuntimeNodesListing } from "../../../runtime-nodes/utils/runtimeNodes";
+import RuntimeNodeTargetLine from "../../../runtime-nodes/view/RuntimeNodeTargetLine";
 import { NextTaskBanner } from "../../../task-master";
 import {
   Dialog,
@@ -60,6 +62,8 @@ type ProviderSelectionEmptyStateProps = {
   claudeProfiles: ClaudeProfile[];
   selectedClaudeProfileId: string | null;
   onSelectClaudeProfile: (profileId: string) => void;
+  /** Backend RuntimeNode listing shown as the new session's target line (FT-M07). */
+  runtimeNodes: { listing: RuntimeNodesListing | null; loading: boolean; error: string | null };
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;
@@ -121,6 +125,7 @@ export default function ProviderSelectionEmptyState({
   claudeProfiles,
   selectedClaudeProfileId,
   onSelectClaudeProfile,
+  runtimeNodes,
   textareaRef,
   claudeModel,
   setClaudeModel,
@@ -404,6 +409,13 @@ export default function ProviderSelectionEmptyState({
               })}
             </div>
           )}
+
+          <RuntimeNodeTargetLine
+            listing={runtimeNodes.listing}
+            loading={runtimeNodes.loading}
+            error={runtimeNodes.error}
+            className="mx-auto mt-3 max-w-xs"
+          />
 
           <p className="mt-4 text-center text-sm text-muted-foreground/70">
             {

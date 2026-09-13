@@ -5,6 +5,7 @@ import { Badge, Button, Input } from '../../../../../../../shared/view/ui';
 import { deriveMonogram } from '../../../../../../../shared/identity';
 import IdentityMonogram from '../../../../../../identity/view/IdentityMonogram';
 import ProviderLoginModal from '../../../../../../provider-auth/view/ProviderLoginModal';
+import ClaudeLiveUsageSummary from '../../../../../../provider-usage/view/ClaudeLiveUsageSummary';
 import UsageCheckModal from '../../../../../../usage/view/UsageCheckModal';
 import { useClaudeProfiles, type ClaudeProfile } from '../../../../../hooks/useClaudeProfiles';
 
@@ -100,6 +101,9 @@ function ProfileRow({ profile, pending, onLogin, onVerify, onSetDefault, onRenam
           {t(`claudeProfiles.connectionState.${profile.connectionState}`)}
         </Badge>
       </div>
+
+      {/* Live usage for THIS account only (FT-M07); "Check usage" below stays the raw /usage fallback. */}
+      {isConnected && <ClaudeLiveUsageSummary claudeProfileId={profile.id} />}
 
       {!isRenaming && (
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3">

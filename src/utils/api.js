@@ -372,6 +372,37 @@ export const api = {
       }),
   },
 
+  // RuntimeNode identity and probed availability (FT-M07). Read-only: nodes
+  // and their capabilities are reported by the server's own probes.
+  runtimeNodes: {
+    list: ({ refresh = false } = {}) =>
+      authenticatedFetch(`/api/runtime-nodes${refresh ? '?refresh=1' : ''}`),
+  },
+
+  // Claude live usage from Claude Code's statusLine (FT-M07). A null
+  // `profileId` explicitly addresses the historical ~/.claude account, which
+  // has no profile id. Responses never carry config paths or settings.
+  claudeLiveUsage: {
+    get: (profileId) =>
+      authenticatedFetch(profileId
+        ? `/api/claude-profiles/${encodeURIComponent(profileId)}/live-usage`
+        : '/api/claude-profiles/legacy-home/live-usage'),
+
+    enableBridge: (profileId) =>
+      authenticatedFetch(profileId
+        ? `/api/claude-profiles/${encodeURIComponent(profileId)}/live-usage/bridge`
+        : '/api/claude-profiles/legacy-home/live-usage/bridge', {
+        method: 'POST',
+      }),
+
+    disableBridge: (profileId) =>
+      authenticatedFetch(profileId
+        ? `/api/claude-profiles/${encodeURIComponent(profileId)}/live-usage/bridge`
+        : '/api/claude-profiles/legacy-home/live-usage/bridge', {
+        method: 'DELETE',
+      }),
+  },
+
   // Claude multi-account profile endpoints. Responses never carry a
   // profile's configDirectory or credentials — see MULTI_ACCOUNT_SPEC.md §3.4.
   claudeProfiles: {

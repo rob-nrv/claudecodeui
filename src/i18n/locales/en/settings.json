@@ -407,6 +407,32 @@
       "checkUsage": "Check usage",
       "remove": "Remove",
       "confirmRemove": "Confirm remove"
+    },
+    "liveUsage": {
+      "title": "Live usage",
+      "fiveHour": "Session 5 h",
+      "sevenDay": "Weekly 7 d",
+      "used": "used",
+      "notReported": "Unavailable",
+      "windowReset": "Reset since last report",
+      "resetsInMinutes": "Resets in {{minutes}} min",
+      "resetsInHours": "Resets in {{hours}} h {{minutes}} min",
+      "resetsAt": "Resets {{date}}",
+      "freshCapture": "Updated {{minutes}} min ago",
+      "staleCapture": "Stale · last update {{minutes}} min ago",
+      "noSnapshotDisabled": "Not captured yet.",
+      "noSnapshot": "Appears after a Claude response in an interactive Claude Code session for this account.",
+      "attributionMismatch": "The last capture belongs to another account and was ignored.",
+      "invalidSnapshot": "The last capture could not be trusted and was ignored.",
+      "enableWrapsExisting": "Your existing status line is kept: CloudCLI runs it after reading the usage.",
+      "enableAddsStatusLine": "Adds a status line to Claude Code for this account, which hides its footer shortcut hints.",
+      "capturingWrapped": "Capturing from Claude Code. Your status line still runs.",
+      "capturing": "Capturing from Claude Code's status line.",
+      "needsRepair": "The usage bridge needs to be repaired before it can run.",
+      "settingsUnreadable": "Claude settings for this account could not be read, so CloudCLI will not change them.",
+      "enable": "Enable live usage",
+      "repair": "Repair",
+      "disable": "Disable"
     }
   },
   "permissions": {

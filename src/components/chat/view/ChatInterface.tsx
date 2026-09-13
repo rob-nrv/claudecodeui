@@ -13,6 +13,8 @@ import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
+import { useRuntimeNodes } from '../../runtime-nodes/hooks/useRuntimeNodes';
+import { resolveCreationTarget } from '../../runtime-nodes/utils/runtimeNodes';
 import { resolveExecutionIdentity } from '../../../shared/identity';
 import { isHandoffDraftActive, planHandoffDraftOwnership, resolveHandoffPrefill } from '../../session-handoff/utils/handoff';
 import { clearHandoffDraft, readHandoffDraft, writeHandoffDraft } from '../../session-handoff/utils/handoffDraftStorage';
@@ -139,6 +141,16 @@ function ChatInterface({
     return selectedClaudeProfileId ?? defaultClaudeProfileId;
   }, [provider, claudeProfiles, selectedClaudeProfileId, defaultClaudeProfileId]);
 
+  // RuntimeNode for the NEXT brand-new session (FT-M07). Like the account
+  // above, it only feeds the one-time session-creation POST — an existing
+  // session's runtime binding lives on its row. Nothing is implied unless
+  // exactly one node can execute.
+  const runtimeNodes = useRuntimeNodes();
+  const creationRuntimeNodeId = useMemo(
+    () => resolveCreationTarget(runtimeNodes.listing)?.nodeId ?? null,
+    [runtimeNodes.listing],
+  );
+
   const {
     chatMessages,
     addMessage,
@@ -264,6 +276,7 @@ function ChatInterface({
     currentSessionId,
     provider,
     claudeProfileId: resolvedClaudeProfileId,
+    runtimeNodeId: creationRuntimeNodeId,
     permissionMode,
     cyclePermissionMode,
     currentProviderModel,
@@ -499,6 +512,7 @@ function ChatInterface({
           claudeProfiles={claudeProfiles}
           selectedClaudeProfileId={resolvedClaudeProfileId}
           onSelectClaudeProfile={setSelectedClaudeProfileId}
+          runtimeNodes={runtimeNodes}
           provider={provider}
           setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
           textareaRef={textareaRef}
