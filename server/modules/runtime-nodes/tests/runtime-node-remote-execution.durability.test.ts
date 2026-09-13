@@ -159,3 +159,37 @@ test('frames from another node, or with an unknown execution id, never touch a r
   fake.frame('pixel-node', { type: 'run.finished', executionId, seq: 1, outcome: 'completed' });
   assert.deepEqual(await result, { outcome: 'completed', code: null });
 });
+
+test('a new link that supersedes a half-open one, from a node that no longer has the run, fails it at once (no phantom running)', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 60_000, ackTimeoutMs: 60_000 });
+  const running = startRun(fake, service);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId: running.executionId });
+
+  // No close event: the old socket was half-open and the new connection replaced it.
+  fake.reconnect('pixel-node', []);
+  const outcome = await Promise.race([running.result, sleep(200).then(() => 'still running')]);
+  assert.deepEqual(outcome, { outcome: 'failed', code: 'RUNTIME_NODE_RESTARTED' });
+  assert.equal(service.hasActiveRun('session-1'), false);
+});
+
+test('a dispatch lost on a superseded link fails explicitly instead of waiting for an acknowledgement forever', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 60_000, ackTimeoutMs: 60_000 });
+  const dispatching = startRun(fake, service);
+
+  fake.reconnect('pixel-node', []);
+  const outcome = await Promise.race([dispatching.result, sleep(200).then(() => 'still dispatching')]);
+  assert.deepEqual(outcome, { outcome: 'failed', code: 'RUNTIME_NODE_RESTARTED' });
+  assert.equal(fake.sent.filter((entry) => entry.frame.type === 'run.start').length, 1, 'never re-dispatched');
+});
+
+test('a reconnecting node that reports the run keeps it, whatever state the control plane thought it was in', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 60_000, ackTimeoutMs: 60_000 });
+  const run = startRun(fake, service);
+  assert.deepEqual(fake.reconnect('pixel-node', [{ executionId: run.executionId as string, lastSeq: 0 }]), [{ executionId: run.executionId, accepted: true, lastSeq: 0 }]);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId: run.executionId });
+  fake.frame('pixel-node', { type: 'run.finished', executionId: run.executionId, seq: 1, outcome: 'completed' });
+  assert.deepEqual(await run.result, { outcome: 'completed', code: null });
+});

@@ -378,9 +378,12 @@ export function createRuntimeNodeRemoteExecutionService(dependencies: {
       return { executionId: entry.executionId, accepted: true, lastSeq: execution.lastSeq };
     });
 
-    // A node that reconnects without a run it owned has lost it (restart): fail now, not after the grace.
+    // The hello is authoritative for what the node process owns. A run it does not
+    // report is lost — after a restart, or dispatched on a half-open link that this
+    // connection superseded without a close event — so it fails now, whatever state
+    // this server still had it in, instead of reading "running" forever.
     for (const execution of [...executions.values()]) {
-      if (execution.input.nodeId === nodeId && execution.state === 'link_lost' && !reported.has(execution.executionId)) {
+      if (execution.input.nodeId === nodeId && execution.state !== 'finished' && !reported.has(execution.executionId)) {
         emitError(execution, `${execution.input.nodeLabel} restarted and no longer has this run. It was not moved to another node.`);
         finish(execution, { outcome: 'failed', code: 'RUNTIME_NODE_RESTARTED' });
       }

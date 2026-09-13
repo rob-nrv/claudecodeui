@@ -113,6 +113,14 @@ Every path is classified deterministically. Precedence:
   digest. **This detection is best-effort and not perfect**; a checkpoint must
   also honour the project's own exclusions.
 - Unclassifiable paths (absolute, traversal, NUL) are denied.
+- Secret folders, Claude local settings and Git metadata match in **any letter
+  case**, because Windows and macOS resolve `.SSH/` or `.GIT/` to the real
+  folders. `.git` as a folder **or** as a gitlink file (and the NTFS short name
+  `git~1`) is never syncable at any depth; restoring one could rewrite hooks or
+  redirect a repository. Other local-only folders (`node_modules/`, `dist/`, …)
+  still match case-sensitively.
+- Files Git ignores are not part of the change set at all (inspection uses
+  `git status`, which omits them), so they are neither synced nor digested.
 
 ## Workspace Snapshot manifest, version 1
 
@@ -163,6 +171,22 @@ Blockers:
 
 A different HEAD always blocks: ancestry across nodes is never guessed without
 fetching. Divergent work is surfaced, never overwritten.
+
+## Restore-time requirements (for the mission that applies snapshots)
+
+The manifest accepts paths that are valid on Linux but unsafe or ambiguous on
+the filesystem a snapshot may be restored to. The applying node must check them
+against its **own** filesystem before writing anything, and block instead of guessing:
+
+- **Case or Unicode collisions:** `src/A.ts` and `src/a.ts`, or NFC and NFD
+  spellings of the same name, collapse to one file on case-insensitive or
+  normalizing filesystems.
+- **Windows-reserved names and syntax:** `CON`, `NUL`, trailing dots or spaces,
+  and `:` (alternate data streams, e.g. `file.txt:stream`).
+- **Symlinks:** a symlink entry's target (hashed, not stored as a path) must
+  resolve inside the workspace, or be refused.
+- **Look-alike names:** bidirectional or invisible control characters in names
+  should be surfaced to the user rather than silently written.
 
 ## Not implemented yet
 

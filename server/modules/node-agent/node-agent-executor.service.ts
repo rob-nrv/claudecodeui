@@ -228,6 +228,12 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
       return;
     }
     await journal?.recordStarted(executionId, appSessionId);
+    if (cancelledBeforeAccept.has(executionId)) {
+      // Cancelled during the journal write: it never runs, and the journal records how it ended.
+      void journal?.recordFinished(executionId, 'aborted');
+      release('CANCELLED');
+      return;
+    }
 
     const execution: Execution = {
       executionId,
@@ -332,9 +338,17 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
   };
 
   return {
-    /** Executions a reconnecting node reports in its hello. */
+    /**
+     * Executions a reconnecting node reports in its hello: accepted runs, and
+     * runs still being admitted (lastSeq 0), so the control plane can take
+     * those back too instead of never hearing about them.
+     */
     activeExecutions(): Array<{ executionId: string; lastSeq: number }> {
-      return [...executions.values()].map((execution) => ({ executionId: execution.executionId, lastSeq: execution.seq }));
+      const accepted = [...executions.values()].map((execution) => ({ executionId: execution.executionId, lastSeq: execution.seq }));
+      const admitting = [...executionIdBySession.values()]
+        .filter((executionId) => !executions.has(executionId))
+        .map((executionId) => ({ executionId, lastSeq: 0 }));
+      return [...accepted, ...admitting];
     },
 
     /** Runs holding a concurrency slot right now (admitting or running). */
@@ -386,6 +400,18 @@ export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) 
       for (const execution of executions.values()) {
         if (!answered.has(execution.executionId)) {
           void abortLocally(execution, 'not resumed');
+        }
+      }
+      const takenBack = new Set(
+        answers
+          .map(readRecord)
+          .filter((record): record is Record<string, unknown> => Boolean(record && record.accepted === true && typeof record.executionId === 'string'))
+          .map((record) => record.executionId as string),
+      );
+      for (const executionId of executionIdBySession.values()) {
+        if (!executions.has(executionId) && !takenBack.has(executionId)) {
+          // Still being admitted when the link dropped, and not taken back: it must never start unobserved.
+          cancelledBeforeAccept.add(executionId);
         }
       }
     },

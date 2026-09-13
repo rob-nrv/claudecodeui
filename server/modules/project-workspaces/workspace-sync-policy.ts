@@ -65,7 +65,7 @@ const SECRET_FILE_NAMES = new Set([
 /** `.env.*` variants that are templates by convention and hold no values. */
 const ENV_TEMPLATE_SUFFIXES = new Set(['example', 'sample', 'template', 'dist', 'defaults']);
 
-const SECRET_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.kdbx', '.tfstate', '.ppk', '.asc', '.gpg']);
+const SECRET_EXTENSIONS = new Set(['.pem', '.key', '.p8', '.p12', '.pfx', '.jks', '.keystore', '.kdbx', '.tfstate', '.ppk', '.asc', '.gpg']);
 
 const SECRET_NAME_PATTERNS: Array<{ rule: string; pattern: RegExp }> = [
   { rule: 'secret:ssh_private_key', pattern: /^id_(rsa|dsa|ecdsa|ed25519)(_[\w-]+)?$/ },
@@ -74,8 +74,17 @@ const SECRET_NAME_PATTERNS: Array<{ rule: string; pattern: RegExp }> = [
   { rule: 'secret:tfstate_backup', pattern: /\.tfstate\.backup$/ },
 ];
 
-/** Project-relative files that are credentials even inside otherwise syncable folders. */
+/** Folder/file pairs that are credentials at any depth (a nested package can be its own Claude project root). */
 const SECRET_RELATIVE_PATHS = new Set(['.claude/settings.local.json', '.claude/.credentials.json']);
+
+/**
+ * Git metadata in any spelling a checkout could resolve to: `.git` as a folder
+ * or as a gitlink file, in any letter case (case-insensitive filesystems), and
+ * the NTFS short name `git~1`. Git itself refuses to track such paths; a
+ * checkpoint must never carry them, since restoring one could rewrite a
+ * repository's hooks or redirect its object store.
+ */
+const GIT_METADATA_SEGMENTS = new Set(['.git', 'git~1']);
 
 const LOCAL_ONLY_DIRECTORIES = new Set([
   '.git',
@@ -208,15 +217,19 @@ export function classifyWorkspacePath(relativePath: unknown, policy: WorkspaceSy
   const name = segments[segments.length - 1];
   const lowerName = name.toLowerCase();
   const directories = segments.slice(0, -1);
+  // Secret and Git-metadata rules compare case-insensitively: on Windows and
+  // macOS `.SSH/` or `.GIT/` resolve to the same folders as `.ssh/` and `.git/`.
+  const lowerSegments = segments.map((segment) => segment.toLowerCase());
+  const lowerDirectories = lowerSegments.slice(0, -1);
 
-  for (let index = 0; index < directories.length; index += 1) {
-    const single = directories[index];
-    const pair = index + 1 < directories.length ? `${single}/${directories[index + 1]}` : null;
+  for (let index = 0; index < lowerDirectories.length; index += 1) {
+    const single = lowerDirectories[index];
+    const pair = index + 1 < lowerDirectories.length ? `${single}/${lowerDirectories[index + 1]}` : null;
     if (SECRET_DIRECTORIES.has(single) || (pair && SECRET_DIRECTORIES.has(pair))) {
       return { syncClass: 'secret', rule: 'secret:credential_directory' };
     }
   }
-  if (SECRET_RELATIVE_PATHS.has(normalized)) {
+  if (lowerSegments.length >= 2 && SECRET_RELATIVE_PATHS.has(lowerSegments.slice(-2).join('/'))) {
     return { syncClass: 'secret', rule: 'secret:claude_local_settings' };
   }
   if (SECRET_FILE_NAMES.has(lowerName)) {
@@ -244,6 +257,9 @@ export function classifyWorkspacePath(relativePath: unknown, policy: WorkspaceSy
     }
   }
 
+  if (lowerSegments.some((segment) => GIT_METADATA_SEGMENTS.has(segment))) {
+    return { syncClass: 'local_only', rule: 'local:git_metadata' };
+  }
   if (directories.some((directory) => LOCAL_ONLY_DIRECTORIES.has(directory))) {
     return { syncClass: 'local_only', rule: 'local:regenerable_directory' };
   }
