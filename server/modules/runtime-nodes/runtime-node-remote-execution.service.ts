@@ -129,7 +129,11 @@ function isFetchHistoryResult(value: unknown): value is FetchHistoryResult {
  * re-sent after a reconnect, never redirected to another node. Frames are
  * accepted only from the node that owns the execution and only with a
  * strictly increasing `seq`. A link that drops mid-run gets a bounded grace
- * period to resume; after it the run fails explicitly.
+ * period to resume; after it the run fails explicitly — whether that loss is
+ * noticed through a clean close (then waiting out the grace for a reconnect
+ * that may never come) or, the common case for a real network blip, only
+ * once a fresh connection from the same node already replaces it (judged
+ * immediately against the same grace budget instead of assumed fine).
  */
 export function createRuntimeNodeRemoteExecutionService(dependencies: {
   link: RuntimeNodeLinkService;
@@ -137,13 +141,34 @@ export function createRuntimeNodeRemoteExecutionService(dependencies: {
   onWorkspaceRejected?(nodeId: string, projectId: string): void;
   ackTimeoutMs?: number;
   reconnectGraceMs?: number;
+  /**
+   * HC-06 repair: `link.onLinkClosed`'s `staleForMs` is measured from the
+   * node's last frame or heartbeat, so a link that was perfectly healthy
+   * can already read as stale by up to one heartbeat interval before any
+   * real outage even starts. Without this margin, a reconnect landing well
+   * within `reconnectGraceMs` of the real outage could still be measured as
+   * older than that and be refused. Only widens the "was this reconnect
+   * still trustworthy" check below `reconnectGraceMs` + this margin; the
+   * timer-based wait for an as-yet-unseen reconnect still uses
+   * `reconnectGraceMs` alone.
+   */
+  reconnectStalenessMarginMs?: number;
   cancelTimeoutMs?: number;
   requestTimeoutMs?: number;
 }) {
   const { link } = dependencies;
   const notifications = dependencies.notifications ?? NO_NOTIFICATIONS;
   const ackTimeoutMs = dependencies.ackTimeoutMs ?? 10_000;
-  const reconnectGraceMs = dependencies.reconnectGraceMs ?? 20_000;
+  // HC-06 repair: was 20_000. Real Android reconnect latency after even a
+  // short (~8-10s) airplane-mode blip stacks the user's toggle time, the
+  // radio/DHCP/route re-acquisition Android needs after re-enabling it
+  // (commonly several seconds, sometimes into the low tens of seconds), and
+  // the reconnect handshake itself. 20s left near-zero margin against that;
+  // 35s comfortably covers the measured worst case with the tightened
+  // reconnect backoff (see node-agent-link.client.ts) still landing an
+  // attempt every few seconds within the window.
+  const reconnectGraceMs = dependencies.reconnectGraceMs ?? 35_000;
+  const reconnectStalenessMarginMs = dependencies.reconnectStalenessMarginMs ?? 20_000;
   const cancelTimeoutMs = dependencies.cancelTimeoutMs ?? 8_000;
   const requestTimeoutMs = dependencies.requestTimeoutMs ?? 15_000;
 
@@ -342,7 +367,20 @@ export function createRuntimeNodeRemoteExecutionService(dependencies: {
     }
   });
 
-  link.onLinkClosed((nodeId) => {
+  const failDisconnected = (execution: Execution) => {
+    emitError(execution, `Lost the connection to ${execution.input.nodeLabel}. The run was stopped there and was not moved to another node.`);
+    finish(execution, { outcome: 'failed', code: 'RUNTIME_NODE_DISCONNECTED' });
+  };
+
+  link.onLinkClosed((nodeId, info) => {
+    // HC-06 repair: a link that is only discovered gone because a fresh
+    // connection replaced it (the common shape of a real mobile network
+    // blip — see node-agent-link.client.ts) can already have been silent
+    // far longer than `reconnectGraceMs` by the time we hear about it. That
+    // reconnect is about to ask to resume in the very next frame, so there
+    // is no timer to race here: judge it against the grace budget right now
+    // instead of always trusting whatever the node claims.
+    const tooStaleToResume = info.staleForMs > reconnectGraceMs + reconnectStalenessMarginMs;
     for (const execution of executions.values()) {
       if (execution.input.nodeId !== nodeId || execution.state === 'finished' || execution.state === 'link_lost') {
         continue;
@@ -355,10 +393,11 @@ export function createRuntimeNodeRemoteExecutionService(dependencies: {
       for (const waiter of execution.cancelWaiters.splice(0)) {
         waiter(false);
       }
-      execution.graceTimer = setTimeout(() => {
-        emitError(execution, `Lost the connection to ${execution.input.nodeLabel}. The run was stopped there and was not moved to another node.`);
-        finish(execution, { outcome: 'failed', code: 'RUNTIME_NODE_DISCONNECTED' });
-      }, reconnectGraceMs);
+      if (tooStaleToResume) {
+        failDisconnected(execution);
+        continue;
+      }
+      execution.graceTimer = setTimeout(() => failDisconnected(execution), reconnectGraceMs);
       execution.graceTimer.unref?.();
     }
   });

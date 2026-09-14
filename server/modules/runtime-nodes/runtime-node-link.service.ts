@@ -146,7 +146,13 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
 
   const frameListeners = new Set<(nodeId: string, frame: Record<string, unknown>) => void>();
   const openListeners = new Set<(nodeId: string) => void>();
-  const closeListeners = new Set<(nodeId: string) => void>();
+  const closeListeners = new Set<(nodeId: string, info: { staleForMs: number }) => void>();
+
+  const notifyClosed = (nodeId: string, staleForMs: number) => {
+    for (const listener of closeListeners) {
+      listener(nodeId, { staleForMs: Math.max(0, staleForMs) });
+    }
+  };
   let resolveResume: (nodeId: string, active: LinkHello['activeExecutions']) => Array<{ executionId: string; accepted: boolean; lastSeq: number }>
     = (_nodeId, active) => active.map((entry) => ({ executionId: entry.executionId, accepted: false, lastSeq: 0 }));
 
@@ -242,6 +248,21 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
         supersedesByNode.set(nodeId, recent);
         links.delete(nodeId);
         previous.socket.close(RUNTIME_NODE_LINK_CLOSE.superseded, 'superseded');
+        // HC-06 repair: a half-open link (its process vanished — e.g. an
+        // Android radio going down — without ever sending a close frame)
+        // never reaches the natural `socket.on('close', ...)` notification
+        // below, because by the time that old socket's close eventually
+        // fires, this map entry already points at the new link and the
+        // guard there drops it. Without this, a reconnect after ANY outage,
+        // however long, was silently treated as if nothing had happened:
+        // the remote-execution service never got to judge whether the gap
+        // was still within its bounded grace. Notifying here, with how long
+        // the old link was actually silent, restores that judgment for the
+        // common "reconnect via a fresh connection" path, not just a clean
+        // close followed later by a reconnect.
+        if (previous.helloReceived) {
+          notifyClosed(nodeId, now() - previous.lastFrameAt);
+        }
         if (recent.length > maxSupersedesPerWindow) {
           conflictUntilByNode.set(nodeId, at + conflictCooldownMs);
           console.warn(`[RuntimeNodes] Identity conflict for node ${nodeId}; refusing links for ${Math.round(conflictCooldownMs / 1000)}s.`);
@@ -358,9 +379,7 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
           }
         }
         if (link.helloReceived) {
-          for (const listener of closeListeners) {
-            listener(nodeId);
-          }
+          notifyClosed(nodeId, now() - link.lastFrameAt);
         }
       });
     },
@@ -452,7 +471,14 @@ export function createRuntimeNodeLinkService(dependencies: RuntimeNodeLinkServic
       openListeners.add(listener);
     },
 
-    onLinkClosed(listener: (nodeId: string) => void): void {
+    /**
+     * `staleForMs` is how long this link had already been silent (measured
+     * from its last received frame or heartbeat) by the time the loss was
+     * noticed — 0 for a clean, immediate close; potentially large when a
+     * half-open link was only discovered because a new connection replaced
+     * it. Callers use it to judge whether a run can still trust a resume.
+     */
+    onLinkClosed(listener: (nodeId: string, info: { staleForMs: number }) => void): void {
       closeListeners.add(listener);
     },
 

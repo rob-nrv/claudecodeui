@@ -12,13 +12,13 @@ type Resume = Array<{ executionId: string; accepted: boolean; lastSeq: number }>
 
 function createFakeLink() {
   const frameListeners: Array<(nodeId: string, frame: Record<string, unknown>) => void> = [];
-  const closeListeners: Array<(nodeId: string) => void> = [];
+  const closeListeners: Array<(nodeId: string, info: { staleForMs: number }) => void> = [];
   let resumeResolver: (nodeId: string, active: Array<{ executionId: string; lastSeq: number }>) => Resume = () => [];
   const usable = new Set(['pixel-node', 'nas-node']);
   const sent: Array<{ nodeId: string; frame: Record<string, unknown> }> = [];
   const link = {
     onNodeFrame: (listener: (nodeId: string, frame: Record<string, unknown>) => void) => frameListeners.push(listener),
-    onLinkClosed: (listener: (nodeId: string) => void) => closeListeners.push(listener),
+    onLinkClosed: (listener: (nodeId: string, info: { staleForMs: number }) => void) => closeListeners.push(listener),
     setResumeResolver: (resolver: typeof resumeResolver) => {
       resumeResolver = resolver;
     },
@@ -36,12 +36,29 @@ function createFakeLink() {
     link,
     sent,
     frame: (nodeId: string, frame: Record<string, unknown>) => frameListeners.forEach((listener) => listener(nodeId, frame)),
-    drop: (nodeId: string) => {
+    // A clean, immediately-noticed close (revocation, explicit disconnect,
+    // or the sweep of a link that was already known silent): no staleness
+    // beyond what the caller measured.
+    drop: (nodeId: string, staleForMs = 0) => {
       usable.delete(nodeId);
-      closeListeners.forEach((listener) => listener(nodeId));
+      closeListeners.forEach((listener) => listener(nodeId, { staleForMs }));
     },
     reconnect: (nodeId: string, active: Array<{ executionId: string; lastSeq: number }>) => {
       usable.add(nodeId);
+      return resumeResolver(nodeId, active);
+    },
+    /**
+     * The real link service's other shape of loss (HC-06 repair): the old
+     * link was never cleanly closed — it was silently dead (a half-open
+     * socket, e.g. an Android radio that vanished without a FIN) — and is
+     * only discovered because a fresh connection from the same node just
+     * replaced it. `staleForMs` is how long that old link had already been
+     * silent, exactly as `runtime-node-link.service.ts` computes it from the
+     * superseded link's last frame.
+     */
+    reconnectAfterSupersede: (nodeId: string, active: Array<{ executionId: string; lastSeq: number }>, staleForMs: number) => {
+      usable.add(nodeId);
+      closeListeners.forEach((listener) => listener(nodeId, { staleForMs }));
       return resumeResolver(nodeId, active);
     },
     setUsable: (nodeId: string, value: boolean) => (value ? usable.add(nodeId) : usable.delete(nodeId)),
@@ -192,4 +209,97 @@ test('a reconnecting node that reports the run keeps it, whatever state the cont
   fake.frame('pixel-node', { type: 'run.accepted', executionId: run.executionId });
   fake.frame('pixel-node', { type: 'run.finished', executionId: run.executionId, seq: 1, outcome: 'completed' });
   assert.deepEqual(await run.result, { outcome: 'completed', code: null });
+});
+
+// HC-06 repair: a real mobile network blip (e.g. airplane mode) does not
+// make the node's socket send a clean close — the radio just vanishes. The
+// control plane never sees `onLinkClosed` until the node's own fresh
+// reconnect attempt supersedes the half-open link, so without a staleness
+// check at that exact moment, a resume was accepted no matter how long the
+// node had actually been gone (see the "no close event" test above, which
+// already covers a node that no longer reports the run at all). These tests
+// cover the run still being reported as active on that late reconnect.
+test('a supersede-style reconnect (no close event) within the grace budget resumes the same run', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 500, reconnectStalenessMarginMs: 0, ackTimeoutMs: 1_000 });
+  const { result, output, executionId } = startRun(fake, service);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId });
+  fake.frame('pixel-node', { type: 'run.event', executionId, seq: 1, message: { kind: 'text', content: 'before the blip' } });
+
+  // The old link is still registered (no drop()); the node's own radio
+  // recovered and a fresh connection reports the run as still active.
+  assert.deepEqual(
+    fake.reconnectAfterSupersede('pixel-node', [{ executionId: executionId as string, lastSeq: 1 }], 200),
+    [{ executionId, accepted: true, lastSeq: 1 }],
+    'well within the grace budget: resumed, not refused',
+  );
+  fake.frame('pixel-node', { type: 'run.event', executionId, seq: 2, message: { kind: 'text', content: 'after resume' } });
+  fake.frame('pixel-node', { type: 'run.finished', executionId, seq: 3, outcome: 'completed' });
+
+  assert.deepEqual(await result, { outcome: 'completed', code: null });
+  assert.deepEqual(output.messages.map((message) => message.content), ['before the blip', 'after resume']);
+});
+
+test('a supersede-style reconnect whose real gap exceeds the grace budget fails explicitly instead of silently resuming', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 500, reconnectStalenessMarginMs: 0, ackTimeoutMs: 1_000 });
+  const { result, output, executionId } = startRun(fake, service);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId });
+
+  // The node still claims the run is active, but the real gap since its
+  // last frame is well past the grace budget: trusting it would silently
+  // resume a run the control plane should have already given up on.
+  assert.deepEqual(
+    fake.reconnectAfterSupersede('pixel-node', [{ executionId: executionId as string, lastSeq: 1 }], 5_000),
+    [{ executionId, accepted: false, lastSeq: 0 }],
+    'too stale to trust: refused immediately, no timer to wait out',
+  );
+  assert.deepEqual(await result, { outcome: 'failed', code: 'RUNTIME_NODE_DISCONNECTED' });
+  assert.match(String(output.messages.at(-1)?.content), /not moved to another node/);
+
+  // Whatever the node produced while it thought it was still running (which
+  // may include the native SDK's own tool-denial wording for an interrupted
+  // tool_use — see claude-tool-approvals.provider.ts) must never surface as
+  // if it were part of this already-failed run.
+  const before = output.messages.length;
+  fake.frame('pixel-node', { type: 'run.event', executionId, seq: 2, message: { kind: 'tool_result', isError: true, content: "The user doesn't want to proceed with this tool use." } });
+  fake.frame('pixel-node', { type: 'run.finished', executionId, seq: 3, outcome: 'aborted' });
+  assert.equal(output.messages.length, before, 'nothing from the disowned run reaches the browser');
+});
+
+test('the heartbeat-staleness margin is exact: a reconnect just inside it resumes, just outside it fails', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 1_000, reconnectStalenessMarginMs: 200, ackTimeoutMs: 2_000 });
+
+  const inBudget = startRun(fake, service);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId: inBudget.executionId });
+  assert.deepEqual(
+    fake.reconnectAfterSupersede('pixel-node', [{ executionId: inBudget.executionId as string, lastSeq: 0 }], 1_199),
+    [{ executionId: inBudget.executionId, accepted: true, lastSeq: 0 }],
+    '1_000 + 200 margin, minus one: still trusted',
+  );
+  fake.frame('pixel-node', { type: 'run.finished', executionId: inBudget.executionId, seq: 1, outcome: 'completed' });
+  assert.deepEqual(await inBudget.result, { outcome: 'completed', code: null });
+
+  fake.setUsable('pixel-node', true);
+  const overBudget = startRun(fake, service);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId: overBudget.executionId });
+  assert.deepEqual(
+    fake.reconnectAfterSupersede('pixel-node', [{ executionId: overBudget.executionId as string, lastSeq: 0 }], 1_201),
+    [{ executionId: overBudget.executionId, accepted: false, lastSeq: 0 }],
+    'one past the same budget: refused',
+  );
+  assert.deepEqual(await overBudget.result, { outcome: 'failed', code: 'RUNTIME_NODE_DISCONNECTED' });
+});
+
+test('a superseded link that is not stale still lets a run the node no longer reports fail as restarted, not disconnected', async () => {
+  const fake = createFakeLink();
+  const service = createRuntimeNodeRemoteExecutionService({ link: fake.link, reconnectGraceMs: 500, reconnectStalenessMarginMs: 0, ackTimeoutMs: 1_000 });
+  const { result, executionId } = startRun(fake, service);
+  fake.frame('pixel-node', { type: 'run.accepted', executionId });
+
+  // Fast, healthy reconnect (well within budget) — but the node's hello
+  // simply does not list this run any more (e.g. it restarted).
+  assert.deepEqual(fake.reconnectAfterSupersede('pixel-node', [], 10), [], 'nothing to resume');
+  assert.deepEqual(await result, { outcome: 'failed', code: 'RUNTIME_NODE_RESTARTED' });
 });

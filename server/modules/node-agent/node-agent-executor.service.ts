@@ -99,7 +99,17 @@ function readBoundedString(value: unknown, maxLength: number): string | undefine
  * unobserved.
  */
 export function createNodeAgentExecutor(dependencies: NodeExecutorDependencies) {
-  const graceMs = dependencies.graceMs ?? 20_000;
+  // HC-06 repair: this is a last-resort backstop for "the control plane is
+  // simply never coming back" (it locally interrupts the SDK session, which
+  // is not reversible). The control plane's own reconnectGraceMs, widened for
+  // realistic Android reconnect latency, plus its heartbeat-staleness margin,
+  // is the authoritative decision for anything shorter — see
+  // runtime-node-remote-execution.service.ts. This value must stay well above
+  // that combined budget, so the node never gives up first and locally
+  // interrupts a session (poisoning it with the SDK's own "user doesn't want
+  // to proceed" denial text) while the control plane would still have
+  // resumed it.
+  const graceMs = dependencies.graceMs ?? 90_000;
   const maxRetainedFrames = dependencies.maxRetainedFrames ?? 2000;
   const resolveWorkspace = dependencies.resolveWorkspace ?? resolveNodeWorkspacePath;
   const log = dependencies.log ?? (() => undefined);

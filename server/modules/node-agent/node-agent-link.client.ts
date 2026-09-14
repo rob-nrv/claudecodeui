@@ -31,6 +31,15 @@ type LinkClientDependencies = {
   now?: () => number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
+  /**
+   * FT-M09 HC-06 repair: a mobile radio coming back from a blip (airplane
+   * mode, a tunnel) needs several close-spaced tries, not the same doubling
+   * used for a genuinely long outage. For this many attempts, backoff is
+   * capped at `fastRetryMaxBackoffMs` instead of `maxBackoffMs`; only after
+   * that does it grow to the full ceiling. See docs cited at `scheduleReconnect`.
+   */
+  fastRetryAttempts?: number;
+  fastRetryMaxBackoffMs?: number;
   /** Consecutive refused upgrades (401/403) before the agent gives up; clock skew and revocation both look like this. */
   maxConsecutiveAuthFailures?: number;
   createSocket?: (url: string, options: { headers: Record<string, string>; handshakeTimeout: number; maxPayload: number }) => WebSocket;
@@ -53,6 +62,8 @@ export function createNodeAgentLinkClient(dependencies: LinkClientDependencies) 
   const now = dependencies.now ?? Date.now;
   const initialBackoffMs = dependencies.initialBackoffMs ?? 1_000;
   const maxBackoffMs = dependencies.maxBackoffMs ?? 30_000;
+  const fastRetryAttempts = dependencies.fastRetryAttempts ?? 6;
+  const fastRetryMaxBackoffMs = dependencies.fastRetryMaxBackoffMs ?? 6_000;
   const maxConsecutiveAuthFailures = dependencies.maxConsecutiveAuthFailures ?? 5;
   const createSocket = dependencies.createSocket ?? ((url, options) => new WebSocket(url, options));
   const linkPath = new URL(dependencies.linkUrl).pathname;
@@ -89,7 +100,17 @@ export function createNodeAgentLinkClient(dependencies: LinkClientDependencies) 
     if (stopped || reconnectTimer) {
       return;
     }
-    const exponential = Math.min(maxBackoffMs, initialBackoffMs * 2 ** Math.min(attempt, 10));
+    // HC-06 repair: Android restoring a radio after a blip (airplane mode,
+    // a tunnel) is not instant even once the user re-enables it, and
+    // ENETUNREACH fails an attempt almost immediately while it's still down —
+    // so with a single doubling ceiling, the gap between attempts can grow
+    // past the moment the network actually comes back (e.g. 15s then 31s),
+    // wasting the run's reconnect grace on backoff rather than retries. The
+    // first `fastRetryAttempts` attempts are capped at `fastRetryMaxBackoffMs`
+    // so a real blip gets several close-spaced tries; only a sustained outage
+    // grows to the full `maxBackoffMs` ceiling.
+    const ceiling = attempt < fastRetryAttempts ? Math.min(fastRetryMaxBackoffMs, maxBackoffMs) : maxBackoffMs;
+    const exponential = Math.min(ceiling, initialBackoffMs * 2 ** Math.min(attempt, 10));
     const jittered = exponential * (0.8 + Math.random() * 0.4);
     const delay = Math.max(minimumDelayMs, Math.round(jittered));
     attempt += 1;
