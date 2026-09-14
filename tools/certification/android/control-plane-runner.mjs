@@ -59,7 +59,7 @@ import {
 } from './lib/control-plane-client.mjs';
 import { appendManifestEntry, readManifest, resolveCertificationDir, writeEvidenceFile } from './lib/evidence.mjs';
 import { formatHumanActionBanner, runHumanCheckpoint } from './lib/human-checkpoint.mjs';
-import { runWithRestore } from './lib/with-restore.mjs';
+import { runIdentityMismatchTest } from './lib/identity-test-evidence.mjs';
 
 const REQUIRED_COMMIT = 'a31c3765';
 
@@ -279,15 +279,14 @@ async function cmdTestIdentity() {
     const correctPathAnswer = await rl.question('Path to the CORRECT mapped project folder on the Pixel, to restore afterward: ');
 
     const { cfg: cfg2, token, node } = await connect();
-    const result = await runWithRestore({
+    // Evidence-safe by construction: this never hands the raw
+    // ProjectWorkspaceStateView (which carries `sync.secret`/`sync.secretContent`
+    // — legitimate file-count fields whose KEY NAME alone trips
+    // findForbiddenField, correctly) to anything that gets written to disk.
+    // See lib/identity-test-evidence.mjs.
+    const result = await runIdentityMismatchTest({
       apply: async () => mapWorkspace(cfg2.baseUrl, token, node.nodeId, cfg2.projectId, mismatchPathAnswer.trim()),
-      run: async () => {
-        const state = await getWorkspaceState(cfg2.baseUrl, token, node.nodeId, cfg2.projectId);
-        if (state.state !== 'identity_mismatch') {
-          throw new Error(`Expected state "identity_mismatch", got ${JSON.stringify(state)}`);
-        }
-        return state;
-      },
+      getState: async () => getWorkspaceState(cfg2.baseUrl, token, node.nodeId, cfg2.projectId),
       restore: async () => mapWorkspace(cfg2.baseUrl, token, node.nodeId, cfg2.projectId, correctPathAnswer.trim()),
     });
 
