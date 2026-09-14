@@ -19,7 +19,7 @@ export default function GitHubStarBadge() {
   if (IS_PLATFORM || isDismissed) return null;
 
   return (
-    <div className="group/star relative hidden md:block">
+    <div className="group/star relative mt-2.5 hidden md:block">
       <a
         href={GITHUB_REPO_URL}
         target="_blank"

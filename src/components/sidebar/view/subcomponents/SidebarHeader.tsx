@@ -97,7 +97,7 @@ export default function SidebarHeader({
             <LogoBlock />
           )}
 
-          <div className="flex flex-shrink-0 items-center gap-0.5">
+          <div className="flex flex-shrink-0 items-center gap-1.5">
             <Button
               variant="ghost"
               size="sm"
@@ -139,7 +139,7 @@ export default function SidebarHeader({
         {showSearchTools && (
           <div className="mt-2.5 space-y-2">
             {/* Search mode toggle */}
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
+            <div className="flex gap-1 rounded-lg bg-muted/50 p-0.5">
               <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
@@ -279,7 +279,7 @@ export default function SidebarHeader({
         {/* Mobile search */}
         {showSearchTools && (
           <div className="mt-2.5 space-y-2">
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
+            <div className="flex gap-1 rounded-lg bg-muted/50 p-0.5">
               <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
