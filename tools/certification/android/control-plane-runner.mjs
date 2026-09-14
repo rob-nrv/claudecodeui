@@ -35,6 +35,7 @@
 //   HC06_PROJECT_PATH         the project's path AS THE CONTROL PLANE knows it (for session creation)
 //   HC06_NODE_LABEL           default "Pixel HC-06"
 import readline from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 
 import {
@@ -70,10 +71,16 @@ function requireEnv(name) {
   return value;
 }
 
-/** Only what evidence-only commands (import, status) need — never requires live-server credentials. */
-function evidenceConfig() {
+/** Only what evidence-only commands (import, status) need — never requires live-server credentials. Exported for the Windows-path regression test. */
+export function evidenceConfig() {
   return {
-    evidenceDir: process.env.HC06_EVIDENCE_DIR ?? new URL('./evidence', import.meta.url).pathname,
+    // HC06-IDENTITY-REPAIR-R1: `new URL(...).pathname` on Windows keeps the
+    // leading "/" before the drive letter and never decodes percent-escapes
+    // (a path containing spaces, like this repo's own, comes back as
+    // "%20") — `path.resolve()`-ing that produced the observed
+    // "D:\D:\Claude\...\%20..." double-drive corruption. `fileURLToPath`
+    // handles both correctly on every platform.
+    evidenceDir: process.env.HC06_EVIDENCE_DIR ?? fileURLToPath(new URL('./evidence', import.meta.url)),
   };
 }
 
@@ -375,7 +382,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`\n❌ ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+// Only run the CLI when this file is the entry script — importing it (as
+// the evidence-dir regression test does, to exercise the real exported
+// config function) must never trigger main() and its argv/exit-code side effects.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`\n❌ ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

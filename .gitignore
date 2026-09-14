@@ -140,6 +140,9 @@ tasks/
 # Git worktrees
 .worktrees/
 
+# HC-06 certification harness runtime evidence (device-/user-specific, never committed)
+tools/certification/android/evidence/
+
 # Local desktop packaging artifacts
 /.desktop-build/
 /release/

@@ -30,6 +30,9 @@ import type { RuntimeNodeCapabilityId, RuntimeNodeProbeOutcome } from '@/shared/
 const NOW = Date.UTC(2026, 8, 13, 12, 0, 0);
 const ROOT_A = 'a'.repeat(40);
 const ROOT_B = 'b'.repeat(40);
+// The real commit hash from the HC-06 hardware failure this file's identity
+// tests reproduce (HC06-IDENTITY-REPAIR-R1).
+const ROOT_MISMATCH = 'ea2c8da60fc8131776a931782bce9f01c17dbe45';
 
 const provenProbe = async (): Promise<Record<RuntimeNodeCapabilityId, RuntimeNodeProbeOutcome>> => ({
   'node-runtime': { outcome: 'proven', detail: 'Node 22.12.0 linux x64' },
@@ -68,6 +71,11 @@ function remoteNodesHarness(directory: string) {
   const state = {
     usable: true,
     inspect: async (): Promise<InspectAnswer> => ({ ok: false, reason: 'folder_not_found' }),
+    // HC06-IDENTITY-REPAIR-R1: what the node claims a newly-mapped folder's
+    // root commits are. Defaults to ROOT_A so every existing test (which
+    // never touches this) is unaffected; identity tests below flip it to
+    // simulate mapping onto a different repository.
+    verifyRootCommits: [ROOT_A] as string[],
   };
   const link = {
     path: '/api/runtime-node-link',
@@ -91,7 +99,7 @@ function remoteNodesHarness(directory: string) {
         thermal: { state: 'unknown', reason: 'no_portable_source' },
       },
     }),
-    verifyWorkspace: async (_nodeId: string, requested: string) => ({ ok: true, reason: null, path: requested, rootCommits: [ROOT_A] }),
+    verifyWorkspace: async (_nodeId: string, requested: string) => ({ ok: true, reason: null, path: requested, rootCommits: state.verifyRootCommits }),
     inspectWorkspace: async () => state.inspect(),
     failNodeRuns: () => undefined,
   } as unknown as RuntimeNodeRemoteExecutionService;
@@ -225,6 +233,101 @@ test('workspace state is inspected by the machine that owns the folder and class
     const localState = await local.inspectProjectWorkspace(local.getLocalNodeId(), projectId);
     assert.deepEqual([localState.state, localState.reason, localState.identity], ['dirty', 'unmerged_paths', 'unrecorded']);
     await assert.rejects(() => local.inspectProjectWorkspace(local.getLocalNodeId(), 'missing-project'), { code: 'PROJECT_NOT_FOUND' });
+  });
+});
+
+// HC06-IDENTITY-REPAIR-R1: the real Pixel HC-06 failure this reproduces —
+// mapping a project onto an unrelated repository must not silently
+// re-baseline the recorded identity, or the mapped-onto repository always
+// reads back as a trivial match against itself. See
+// server/modules/database/repositories/runtime-node-workspaces.db.ts's
+// `upsert` for the fix and server/modules/database/tests/
+// runtime-node-workspaces.db.test.ts for the direct persistence-layer proof.
+test('mapping onto an unrelated repository does not replace the recorded identity, surfaces identity_mismatch, and remapping back restores clean/match', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async (directory) => {
+    const { state, service, projectId } = remoteNodesHarness(directory);
+    const gitWith = (rootCommits: string[]) =>
+      ({ state: 'repository', rootIsFolder: true, branch: 'master', detached: false, headCommit: rootCommits[0], rootCommits, upstream: null });
+    const cleanObservation = (rootCommits: string[]) => ({
+      folder: 'available',
+      folderReason: null,
+      git: gitWith(rootCommits),
+      changes: { staged: 0, modified: 0, added: 0, deleted: 0, renamed: 0, untracked: 0, conflicted: 0, total: 0, truncated: false },
+      sync: { syncable: 0, localOnly: 0, secret: 0, userExcluded: 0, secretContent: 0, changesDigest: 'e'.repeat(64), digestReason: null },
+    });
+
+    // 1-2: map project P to repository A; root identity A is recorded.
+    state.verifyRootCommits = [ROOT_A];
+    await service.mapWorkspace({ nodeId: 'pixel-node', projectId, path: '/root/cloudcli-workspaces-hc06/claudecodeui' });
+    assert.deepEqual(runtimeNodeWorkspacesDb.get('pixel-node', projectId)?.gitRootCommits, [ROOT_A]);
+
+    // 3: remap the SAME (node, project) to an unrelated repository B.
+    state.verifyRootCommits = [ROOT_MISMATCH];
+    const remapped = await service.mapWorkspace({ nodeId: 'pixel-node', projectId, path: '/root/cloudcli-workspaces-hc06/hc06-identity-mismatch' });
+    assert.equal(remapped.state, 'mapped', 'the mapping operation itself still succeeds — this is a normal RuntimeNode folder pointer, not a rejection');
+
+    // 4: expected identity A is NOT replaced by B.
+    assert.deepEqual(runtimeNodeWorkspacesDb.get('pixel-node', projectId)?.gitRootCommits, [ROOT_A], 'the recorded baseline must stay A');
+
+    // 5: workspace state reports identity_mismatch (current B vs expected A).
+    state.inspect = async () => ({ ok: true, observation: cleanObservation([ROOT_MISMATCH]) });
+    const mismatch = await service.inspectProjectWorkspace('pixel-node', projectId);
+    assert.equal(mismatch.state, 'identity_mismatch');
+    assert.equal(mismatch.reason, 'different_repository_history');
+    assert.equal(mismatch.identity, 'mismatch');
+
+    // Mismatch never leaks a filesystem path or a repository URL to the browser.
+    const serializedMismatch = JSON.stringify(mismatch);
+    assert.equal(serializedMismatch.includes('/root/cloudcli-workspaces-hc06'), false);
+    assert.equal(serializedMismatch.includes('hc06-identity-mismatch'), false);
+
+    // 6: remap to repository A.
+    state.verifyRootCommits = [ROOT_A];
+    await service.mapWorkspace({ nodeId: 'pixel-node', projectId, path: '/root/cloudcli-workspaces-hc06/claudecodeui' });
+    assert.deepEqual(runtimeNodeWorkspacesDb.get('pixel-node', projectId)?.gitRootCommits, [ROOT_A]);
+
+    // 7: state returns to match/clean.
+    state.inspect = async () => ({ ok: true, observation: cleanObservation([ROOT_A]) });
+    const clean = await service.inspectProjectWorkspace('pixel-node', projectId);
+    assert.deepEqual([clean.state, clean.identity, clean.reason], ['clean', 'match', null]);
+  });
+});
+
+test('remapping to a different clone of the SAME repository (matching root identity) is allowed and never reads as a mismatch', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async (directory) => {
+    const { state, service, projectId } = remoteNodesHarness(directory);
+    const gitWith = (rootCommits: string[]) =>
+      ({ state: 'repository', rootIsFolder: true, branch: 'main', detached: false, headCommit: rootCommits[0], rootCommits, upstream: null });
+    const cleanObservation = (rootCommits: string[]) => ({
+      folder: 'available',
+      folderReason: null,
+      git: gitWith(rootCommits),
+      changes: { staged: 0, modified: 0, added: 0, deleted: 0, renamed: 0, untracked: 0, conflicted: 0, total: 0, truncated: false },
+      sync: { syncable: 0, localOnly: 0, secret: 0, userExcluded: 0, secretContent: 0, changesDigest: 'f'.repeat(64), digestReason: null },
+    });
+
+    state.verifyRootCommits = [ROOT_A];
+    await service.mapWorkspace({ nodeId: 'pixel-node', projectId, path: '/root/ws/app-clone-1' });
+
+    // A second, independent clone of the exact same repository history,
+    // mapped at a different local path on the same node.
+    state.verifyRootCommits = [ROOT_A];
+    await service.mapWorkspace({ nodeId: 'pixel-node', projectId, path: '/root/ws/app-clone-2' });
+    assert.deepEqual(runtimeNodeWorkspacesDb.get('pixel-node', projectId)?.gitRootCommits, [ROOT_A]);
+
+    state.inspect = async () => ({ ok: true, observation: cleanObservation([ROOT_A]) });
+    const result = await service.inspectProjectWorkspace('pixel-node', projectId);
+    assert.deepEqual([result.state, result.identity], ['clean', 'match']);
+  });
+});
+
+test('the first-ever mapping for a project still initializes its identity correctly', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async (directory) => {
+    const { state, service, projectId } = remoteNodesHarness(directory);
+    state.verifyRootCommits = [ROOT_B];
+    assert.equal(runtimeNodeWorkspacesDb.get('pixel-node', projectId), null, 'nothing mapped yet');
+    await service.mapWorkspace({ nodeId: 'pixel-node', projectId, path: '/root/ws/fresh-project' });
+    assert.deepEqual(runtimeNodeWorkspacesDb.get('pixel-node', projectId)?.gitRootCommits, [ROOT_B]);
   });
 });
 

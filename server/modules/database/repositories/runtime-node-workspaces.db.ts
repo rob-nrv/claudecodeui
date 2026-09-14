@@ -5,8 +5,11 @@ import { getConnection } from '@/modules/database/connection.js';
  * keyed by project id since FT-M09. `nodePath` is what the node itself
  * resolved — node-local, sent back to that node only, and never returned by a
  * listing API. `gitRootCommits` is the repository identity the node reported
- * when the folder was mapped: null when never recorded (FT-M08 rows), empty
- * when the folder had no Git history then.
+ * when the folder was FIRST mapped: null when never recorded (FT-M08 rows),
+ * empty when the folder had no Git history then. It is a fixed baseline, not
+ * a live mirror of `nodePath` — `upsert` (see below) never replaces it once
+ * it is non-empty, even when `nodePath` is remapped to an unrelated
+ * repository; only an explicit unmap-then-remap starts a fresh baseline.
  */
 export type RuntimeNodeWorkspaceRecord = {
   nodeId: string;
@@ -58,6 +61,20 @@ export const runtimeNodeWorkspacesDb = {
     return rows.map(toRecord);
   },
 
+  /**
+   * HC06-IDENTITY-REPAIR-R1: `git_root_commits` is the identity recorded
+   * *once*, when a project was first mapped on this node — not a live
+   * mirror of whatever `node_path` currently resolves to. An ordinary
+   * remap (pointing the same (node, project) pair at a different folder)
+   * must never silently replace an already-recorded identity, or mapping
+   * onto an unrelated repository would re-baseline "expected" to that
+   * repository and always read back as a trivial match. The CASE below
+   * keeps the existing row's `git_root_commits` once it is non-empty;
+   * `node_path`/`status`/`reason`/`verified_at` still update normally. The
+   * only way to intentionally reset a mapping's identity is the existing,
+   * explicit delete-then-map (`unmapWorkspace` then this `upsert` again on
+   * a fresh row) — never invented implicitly here.
+   */
   upsert(record: RuntimeNodeWorkspaceRecord): void {
     const rootCommits = record.gitRootCommits === null
       ? null
@@ -71,7 +88,11 @@ export const runtimeNodeWorkspacesDb = {
            status = excluded.status,
            reason = excluded.reason,
            verified_at = excluded.verified_at,
-           git_root_commits = excluded.git_root_commits`
+           git_root_commits = CASE
+             WHEN runtime_node_workspaces.git_root_commits IS NULL OR runtime_node_workspaces.git_root_commits = ''
+               THEN excluded.git_root_commits
+             ELSE runtime_node_workspaces.git_root_commits
+           END`
       )
       .run(record.nodeId, record.projectId, record.nodePath, record.status, record.reason, record.verifiedAt, rootCommits);
   },
