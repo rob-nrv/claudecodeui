@@ -317,7 +317,7 @@ function buildHandoffPackage(context: {
     }
     sections.push(gitLines.join('\n'));
   } else {
-    sections.push('Git state at handoff: unavailable (not a git repository or git could not run).');
+    sections.push('Git state at handoff: unavailable (not a git repository, git could not run, or the workspace is on another runtime node).');
   }
 
   if (context.note) {
@@ -583,9 +583,13 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
       const parentHandoff = sessionHandoffsDb.getByTargetSessionId(source.session_id);
       const taskRootSessionId = parentHandoff?.task_root_session_id ?? source.session_id;
 
+      // FT-M10: a source that ran on a remote RuntimeNode has its working copy
+      // there; this machine's folder says nothing about it, so its Git state is
+      // unknown here rather than read from the wrong copy.
+      const sourceRanRemotely = runtimeNodesService.isRemoteBinding(source.runtime_node_id);
       const [history, git] = await Promise.all([
         readSourceHistory(source.session_id),
-        readGitState(projectPath),
+        sourceRanRemotely ? Promise.resolve(null) : readGitState(projectPath),
       ]);
 
       // Package building awaited I/O: a run may have started meanwhile.

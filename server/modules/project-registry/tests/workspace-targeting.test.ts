@@ -3,10 +3,15 @@
 // that was chosen and refuses instead of offering another folder. Temporary
 // databases only.
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import * as fs from 'node:fs/promises';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
+
+import express from 'express';
 
 import {
   closeConnection,
@@ -15,7 +20,12 @@ import {
   projectsDb,
   runtimeNodeWorkspacesDb,
 } from '@/modules/database/index.js';
-import { createProjectWorkspaceLocator } from '@/modules/project-registry/index.js';
+import {
+  createProjectWorkspaceLocator,
+  resolveRequestWorkspacePath,
+  runtimeTargetMiddleware,
+  setRuntimeLinkPresence,
+} from '@/modules/project-registry/index.js';
 
 const NOW = Date.UTC(2026, 8, 16, 12, 0, 0);
 const ROOT_A = 'a'.repeat(40);
@@ -108,5 +118,54 @@ test('one project id on several nodes: each node resolves its own folder, and ev
     assert.deepEqual(refusal('pc-node', pixelOnlyId), ['WORKSPACE_NOT_ON_NODE', 'no_control_plane_copy']);
     assert.deepEqual(refusal('tablet-node', pixelOnlyId), ['WORKSPACE_NOT_ON_NODE', 'not_mapped']);
     assert.equal((locator.resolve({ projectId: pixelOnlyId, nodeId: 'pixel-node' }) as { path: string }).path, '/root/cloudcli-workspaces/pixel-only');
+  });
+});
+
+test('the per-request target used by Files, Git, TaskMaster and Worktrees survives async work and never leaks between projects or requests', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async (directory) => {
+    const { appId, controlPlanePath, pixelOnlyId } = seedFleet(directory);
+    setRuntimeLinkPresence({ isUsable: (nodeId) => nodeId === 'pixel-node' });
+    const app = express();
+    app.get('/workspace/:projectId', runtimeTargetMiddleware, async (req, res, next) => {
+      try {
+        await delay(5);
+        await Promise.resolve();
+        res.json({ path: resolveRequestWorkspacePath(String(req.params.projectId)) });
+      } catch (error) {
+        next(error);
+      }
+    });
+    app.use((error: { statusCode?: number; code?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.status(error.statusCode ?? 500).json({ code: error.code });
+    });
+    const server = app.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const ask = async (projectId: string, headers: Record<string, string> = {}) => {
+      const response = await fetch(`${base}/workspace/${projectId}`, { headers });
+      return [response.status, await response.json()];
+    };
+    const target = (projectId: string, nodeId: string) => ({ 'X-CloudCLI-Runtime-Project': projectId, 'X-CloudCLI-Runtime-Node': nodeId });
+    try {
+      const results = await Promise.all([
+        ask(appId, target(appId, 'pixel-node')),
+        ask(appId, target(appId, 'pc-node')),
+        ask(appId),
+        ask(appId, target(appId, 'nas-node')),
+        ask(pixelOnlyId, target(appId, 'pixel-node')),
+        ask('ghost-project', target('ghost-project', 'pc-node')),
+      ]);
+      assert.deepEqual(results, [
+        [409, { code: 'WORKSPACE_REMOTE_OPERATION_UNSUPPORTED' }],
+        [200, { path: controlPlanePath }],
+        [200, { path: controlPlanePath }],
+        [409, { code: 'RUNTIME_NODE_OFFLINE' }],
+        [409, { code: 'WORKSPACE_NOT_ON_NODE' }],
+        [200, { path: null }],
+      ], 'concurrent requests each keep their own target; a target for one project never applies to another');
+    } finally {
+      setRuntimeLinkPresence({ isUsable: () => false });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

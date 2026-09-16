@@ -9,12 +9,14 @@ import { promisify } from 'node:util';
 import {
   claudeProfilesDb,
   closeConnection,
+  getConnection,
   initializeDatabase,
   queuedMessagesDb,
   sessionHandoffsDb,
   sessionsDb,
 } from '@/modules/database/index.js';
 import { createSessionHandoffService } from '@/modules/providers/services/session-handoff.service.js';
+import { runtimeNodesService } from '@/modules/runtime-nodes/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import type { NormalizedMessage } from '@/shared/types.js';
 
@@ -350,5 +352,29 @@ test('target options come from the backend with explicit availability', { concur
     assert.equal(byKey.has('claude:null'), false);
 
     assert.equal(offlineService({ isSessionRunning: () => true }).listTargets(SOURCE_ID).blockedReason, 'source_running');
+  });
+});
+
+test("a source that ran on a remote RuntimeNode never has this machine's Git state attributed to it (FT-M10)", { concurrency: false }, async () => {
+  await withHandoffFixture(async ({ personalId }) => {
+    const db = getConnection();
+    db.prepare("INSERT INTO runtime_nodes (node_id, label, is_local) VALUES ('pixel-node', 'Pixel', 0)").run();
+    db.prepare("INSERT INTO runtime_node_credentials (node_id, public_key, status, enrolled_at) VALUES ('pixel-node', 'key', 'active', 1)").run();
+    db.prepare("UPDATE sessions SET runtime_node_id = 'pixel-node' WHERE session_id = ?").run(SOURCE_ID);
+
+    const gitReads: string[] = [];
+    const service = offlineService({
+      readGitState: async (projectPath) => {
+        gitReads.push(projectPath);
+        return { branch: 'main', head: 'abc1234', changedFileCount: 1, changedFiles: ['M local-only.ts'], diffSummary: null };
+      },
+    });
+    const localNodeId = runtimeNodesService.getLocalNodeId();
+    const result = await service.createHandoff(SOURCE_ID, { provider: 'claude', claudeProfileId: personalId, runtimeNodeId: localNodeId });
+    const handoffPackage = service.getLineage(result.sessionId).incoming?.handoffPackage ?? '';
+
+    assert.deepEqual(gitReads, [], "git is not run in this machine's folder for a run that executed on Pixel");
+    assert.doesNotMatch(handoffPackage, /local-only\.ts/);
+    assert.match(handoffPackage, /Git state at handoff: unavailable/);
   });
 });

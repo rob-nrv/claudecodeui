@@ -16,6 +16,8 @@ type ShellIncomingMessage = {
   projectPath?: string;
   /** The project the terminal is opened for (FT-M10); resolved server-side, see `resolveWorkspace`. */
   projectId?: string;
+  /** The RuntimeNode chosen for that project when no session is open; a session's own binding always wins. */
+  runtimeNodeId?: string;
   sessionId?: string;
   hasSession?: boolean;
   provider?: string;
@@ -134,7 +136,7 @@ type ShellWebSocketDependencies = {
    * copy here). `path: null` keeps the client folder for shells naming no
    * registered project. Absent entirely on installs that haven't wired this up.
    */
-  resolveWorkspace?: (input: { sessionId: string | null; projectId: string | null }) => ShellWorkspaceDecision;
+  resolveWorkspace?: (input: { sessionId: string | null; projectId: string | null; runtimeNodeId: string | null }) => ShellWorkspaceDecision;
   spawnPty?: typeof pty.spawn;
 };
 
@@ -337,7 +339,11 @@ export function handleShellConnection(
       if (data.type === 'init') {
         const sessionId = readString(data.sessionId) || null;
         const workspace = dependencies.resolveWorkspace
-          ? dependencies.resolveWorkspace({ sessionId, projectId: readString(data.projectId) || null })
+          ? dependencies.resolveWorkspace({
+            sessionId,
+            projectId: readString(data.projectId) || null,
+            runtimeNodeId: readString(data.runtimeNodeId) || null,
+          })
           : { ok: true as const, path: null };
         if (!workspace.ok) {
           ws.send(JSON.stringify({ type: 'error', code: workspace.code, message: workspace.message }));

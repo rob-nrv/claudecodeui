@@ -25,10 +25,19 @@ export type {
 export {
   createLocalProjectRegistry,
   createProjectWorkspaceLocator,
-  resolveControlPlaneWorkspacePath,
   toWorkspaceResolutionError,
 } from '@/modules/project-registry/local-project-registry.js';
 export type { ProjectWorkspaceLocator, RuntimeNodeLinkPresence } from '@/modules/project-registry/local-project-registry.js';
+// Explicit per-request runtime target for Files, Git, TaskMaster and Worktrees (mounted and wired by server/index.ts).
+export {
+  readRequestRuntimeTarget,
+  resolveRequestWorkspacePath,
+  resolveWorkspacePathForTarget,
+  runtimeTargetMiddleware,
+  RUNTIME_TARGET_NODE_HEADER,
+  RUNTIME_TARGET_PROJECT_HEADER,
+  setRuntimeLinkPresence,
+} from '@/modules/project-registry/workspace-target.js';
 // createProjectRegistryRouter: mounted by the projects routes at /api/projects/registry.
 export { createProjectRegistryRouter } from '@/modules/project-registry/project-registry.routes.js';
 // createInMemoryProjectRegistry: used by contract tests and database-free consumers' tests.

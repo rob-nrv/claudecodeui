@@ -15,7 +15,11 @@ import {
     providerRuntimeService,
 } from '@/modules/providers/index.js';
 import { createShellWorkspaceResolver, createWebSocketServer } from '@/modules/websocket/index.js';
-import { createProjectWorkspaceLocator } from '@/modules/project-registry/index.js';
+import {
+    createProjectWorkspaceLocator,
+    runtimeTargetMiddleware,
+    setRuntimeLinkPresence,
+} from '@/modules/project-registry/index.js';
 import {
     buildLocalServerMarker,
     createLocalServerMarkerStore,
@@ -126,6 +130,9 @@ const remoteAccess = createRemoteAccess({
     authenticateToken,
 });
 
+// Workspace surfaces (Files, Git, TaskMaster, Worktrees) refuse an offline target as offline (FT-M10).
+setRuntimeLinkPresence({ isUsable: (nodeId) => runtimeNodesService.link.isUsable(nodeId) });
+
 // Single WebSocket server that handles chat, shell, plugin proxy and RuntimeNode link paths.
 const wss = createWebSocketServer(server, {
     verifyClient: {
@@ -157,10 +164,7 @@ const wss = createWebSocketServer(server, {
         resolveWorkspace: createShellWorkspaceResolver({
             getSession: (sessionId) => sessionsDb.getSessionById(sessionId),
             isRemoteBinding: (runtimeNodeId) => runtimeNodesService.isRemoteBinding(runtimeNodeId),
-            resolveOnControlPlane: (() => {
-                const locator = createProjectWorkspaceLocator();
-                return (projectId: string) => locator.resolveOnControlPlane(projectId);
-            })(),
+            locator: createProjectWorkspaceLocator({ isUsable: (nodeId) => runtimeNodesService.link.isUsable(nodeId) }),
         }),
     },
     getPluginPort,
@@ -234,22 +238,22 @@ app.use('/api/auth', authRoutes);
 app.use('/api/remote-access', remoteAccess.router);
 
 // File Tree API Routes (protected)
-app.use('/api/file-tree', authenticateToken, fileTreeRoutes);
+app.use('/api/file-tree', authenticateToken, runtimeTargetMiddleware, fileTreeRoutes);
 
 // Projects API Routes (protected)
-app.use('/api/projects', authenticateToken, projectModuleRoutes);
+app.use('/api/projects', authenticateToken, runtimeTargetMiddleware, projectModuleRoutes);
 
 // Chat attachment upload/serving (global ~/.cloudcli/assets store, protected)
 app.use('/api/assets', authenticateToken, assetsRoutes);
 
 // Git API Routes (protected)
-app.use('/api/git', authenticateToken, gitRoutes);
+app.use('/api/git', authenticateToken, runtimeTargetMiddleware, gitRoutes);
 
 // Git worktree management (protected)
-app.use('/api/worktrees', authenticateToken, worktreesRoutes);
+app.use('/api/worktrees', authenticateToken, runtimeTargetMiddleware, worktreesRoutes);
 
 // TaskMaster API Routes (protected)
-app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);
+app.use('/api/taskmaster', authenticateToken, runtimeTargetMiddleware, taskmasterRoutes);
 
 // Commands API Routes (protected)
 app.use('/api/commands', authenticateToken, commandsRoutes);

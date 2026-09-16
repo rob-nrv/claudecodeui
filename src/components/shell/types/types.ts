@@ -7,8 +7,10 @@ import type { Project, ProjectSession } from '../../../types/app';
 export type ShellInitMessage = {
   type: 'init';
   projectPath: string;
-  /** The project's id; the backend opens the terminal only in this machine's own copy of it. */
+  /** The project's id; the backend opens the terminal only in the targeted node's copy, and only when that node is this machine. */
   projectId: string | null;
+  /** The node chosen for the project (FT-M10); the backend lets a session's own binding win over it. */
+  runtimeNodeId: string | null;
   sessionId: string | null;
   hasSession: boolean;
   provider: string;

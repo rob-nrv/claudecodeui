@@ -91,7 +91,7 @@ function createRouteHandler(
       await operation(request, response);
     } catch (error) {
       if (error instanceof AppError) {
-        response.status(error.statusCode).json({ error: error.message });
+        response.status(error.statusCode).json({ error: error.message, code: error.code });
         return;
       }
 

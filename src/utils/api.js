@@ -1,5 +1,7 @@
 import { IS_PLATFORM } from "../shared/utils";
 
+import { workspaceRuntimeTargetHeaders } from "./workspaceRuntimeTarget";
+
 export const AUTH_TOKEN_REFRESHED_EVENT = 'auth-token-refreshed';
 export const AUTH_SESSION_EXPIRED_EVENT = 'auth-session-expired';
 
@@ -139,6 +141,7 @@ export const authenticatedFetch = (url, options = {}) => {
     ...options,
     headers: {
       ...defaultHeaders,
+      ...workspaceRuntimeTargetHeaders(url),
       ...options.headers,
     },
   }).then((response) => {

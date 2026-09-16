@@ -18,6 +18,8 @@ import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
 import { TaskMasterPanel } from '../../task-master';
 import { useSessionLineage } from '../../session-handoff/hooks/useSessionLineage';
+import { readRuntimeTargetChoice } from '../../runtime-nodes/utils/runtimeNodes';
+import { selectWorkspaceRuntimeTarget, setWorkspaceRuntimeTargetResolver } from '../../../utils/workspaceRuntimeTarget';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -146,6 +148,16 @@ function MainContent({
       resolvedFileOpen(filePath);
     },
   });
+
+  // FT-M10: workspace panels (Files, Git, Tasks, Worktrees) work against this
+  // project's runtime target — the selected session's node, else the node chosen
+  // for the project — so the server never assumes this machine. Read at request
+  // time: registered during render, before any child effect can fetch.
+  setWorkspaceRuntimeTargetResolver(() => selectWorkspaceRuntimeTarget(
+    selectedProject?.projectId,
+    selectedSession,
+    readRuntimeTargetChoice(selectedProject?.projectId ?? null),
+  ));
 
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;

@@ -75,12 +75,26 @@ A project is its `project_id` everywhere; paths are node-local knowledge.
   `RUNTIME_NODE_NOT_ENROLLED`, `RUNTIME_NODE_REVOKED`, `RUNTIME_NODE_OFFLINE`,
   `WORKSPACE_NOT_ON_NODE`, `WORKSPACE_UNAVAILABLE`. A refusal never carries a
   path, and no other node's folder is ever substituted.
-- **Files, Git, TaskMaster, Worktrees, Shell** run on this machine, so they
-  resolve this machine's copy by project id. A project without one is refused
-  (`WORKSPACE_NOT_ON_NODE`, 409) instead of reading a missing project (404) or
-  the current directory. A Shell for a session bound to a remote node is refused
-  (`RUNTIME_NODE_REMOTE_SESSION`). Shells that name no registered project (login,
-  usage) keep their client folder as before.
+- **Files, Git, TaskMaster, Worktrees, Shell are target-aware.** They run on
+  this machine, and every request names its RuntimeNode: the browser sends
+  `X-CloudCLI-Runtime-Node` + `X-CloudCLI-Runtime-Project` (Shell: `runtimeNodeId`
+  on `init`) — the selected session's node, else the node chosen for the
+  project. That node alone is resolved:
+  - the local node → this machine's copy, and only it (a client path never wins
+    for a registered project);
+  - a remote node → refused on its own grounds (`RUNTIME_NODE_NOT_ENROLLED`,
+    `RUNTIME_NODE_REVOKED`, `WORKSPACE_NOT_ON_NODE`, `WORKSPACE_UNAVAILABLE`,
+    `RUNTIME_NODE_OFFLINE`, `RUNTIME_NODE_NOT_FOUND`) or, when its folder is
+    usable, `WORKSPACE_REMOTE_OPERATION_UNSUPPORTED` (409): these operations are
+    not transported to other nodes yet. Nothing runs in this machine's folder,
+    another node's folder or the current directory instead.
+  - A Shell for a session always uses that session's binding
+    (`RUNTIME_NODE_REMOTE_SESSION` for a remote one); a half-sent or malformed
+    target is refused (`RUNTIME_TARGET_INVALID`); a target names one project and
+    never applies to another. Without a target, this machine is the target.
+    Shells naming no registered project (login, usage) keep their client folder.
+- **Handoff** does not read Git state from this machine for a source run that
+  executed on a remote node; it reads as unavailable.
 - **Identity** is unchanged from FT-M09: a remap never re-baselines
   `git_root_commits`, and a mismatch reads as `identity_mismatch` on that node.
 

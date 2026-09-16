@@ -1,7 +1,7 @@
 import { access } from 'node:fs/promises';
 
 import { projectsDb } from '@/modules/database/index.js';
-import { createProjectWorkspaceLocator, resolveControlPlaneWorkspacePath } from '@/modules/project-registry/index.js';
+import { resolveRequestWorkspacePath } from '@/modules/project-registry/index.js';
 import {
   createProject,
   deleteOrArchiveProject,
@@ -39,8 +39,6 @@ const worktreeFileSystem: WorktreeFileSystem = {
   },
 };
 
-const controlPlaneWorkspaces = createProjectWorkspaceLocator();
-
 /**
  * Projects boundary for Worktrees production workflows.
  *
@@ -49,8 +47,8 @@ const controlPlaneWorkspaces = createProjectWorkspaceLocator();
  * these operations.
  */
 const worktreeProjects: WorktreeProjectGateway = {
-  // FT-M10: this machine's own copy, resolved explicitly; a project with no copy here is refused, not treated as missing.
-  getProjectPathById: (projectId) => resolveControlPlaneWorkspacePath(controlPlaneWorkspaces, projectId),
+  // FT-M10: the request's explicit runtime target decides the copy; a remote target or no copy here is refused.
+  getProjectPathById: (projectId) => resolveRequestWorkspacePath(projectId),
   getProjectByPath: (projectPath) => projectsDb.getProjectPath(projectPath),
   createProject: (input) => createProject(input),
   restoreProject: (projectId) => restoreArchivedProject(projectId),

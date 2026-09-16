@@ -3,6 +3,7 @@ import type { DragEvent } from 'react';
 
 import { IS_PLATFORM } from '../../../shared/utils';
 import type { Project } from '../../../types/app';
+import { workspaceRuntimeTargetHeaders } from '../../../utils/workspaceRuntimeTarget';
 import {
   expireAuthSession,
   getStoredAuthToken,
@@ -117,7 +118,11 @@ const uploadFormDataWithProgress = (
   new Promise<UploadResponse>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
-    xhr.open('POST', `/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`);
+    const uploadUrl = `/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`;
+    xhr.open('POST', uploadUrl);
+    for (const [name, value] of Object.entries(workspaceRuntimeTargetHeaders(uploadUrl))) {
+      xhr.setRequestHeader(name, value);
+    }
 
     const token = getStoredAuthToken();
     if (!IS_PLATFORM && token) {

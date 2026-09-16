@@ -4,13 +4,10 @@ import os from 'node:os';
 
 import spawn from 'cross-spawn';
 
-import { createProjectWorkspaceLocator, resolveControlPlaneWorkspacePath } from '@/modules/project-registry/index.js';
+import { resolveRequestWorkspacePath } from '@/modules/project-registry/index.js';
 
 import { createTaskmasterRouter } from './taskmaster.routes.js';
 import { createTaskmasterService } from './taskmaster.service.js';
-
-// FT-M10: the control plane's own copy of a project, resolved explicitly for this machine's node.
-const controlPlaneWorkspaces = createProjectWorkspaceLocator();
 
 const taskmasterService = createTaskmasterService({
   readTextFile: (filePath) => fsPromises.readFile(filePath, 'utf8'),
@@ -22,6 +19,7 @@ export const taskmasterRoutes = createTaskmasterRouter({
   fileSystem: fs,
   fileSystemPromises: fsPromises,
   spawnProcess: spawn,
-  resolveProjectPathById: (projectId) => resolveControlPlaneWorkspacePath(controlPlaneWorkspaces, projectId),
+  // FT-M10: the request's explicit runtime target decides the copy; a remote target is refused.
+  resolveProjectPathById: (projectId) => resolveRequestWorkspacePath(projectId),
   taskmasterService,
 });

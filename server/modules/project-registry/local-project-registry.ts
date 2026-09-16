@@ -138,21 +138,3 @@ export function toWorkspaceResolutionError(resolution: Exclude<WorkspaceResoluti
     details: { projectId: resolution.projectId, nodeId: resolution.nodeId, reason: resolution.reason },
   });
 }
-
-/**
- * Path of this control plane's own copy for the surfaces that operate on this
- * machine only (Files, Git, TaskMaster, Worktrees). Keeps their "null = project
- * not found" contract; any other refusal — a known project with no copy here —
- * is thrown as an explicit error. Never a different project's folder, never
- * `process.cwd()`, never a remote node's folder.
- */
-export function resolveControlPlaneWorkspacePath(locator: ProjectWorkspaceLocator, projectId: string): string | null {
-  const resolution = locator.resolveOnControlPlane(projectId);
-  if (resolution.ok) {
-    return resolution.path;
-  }
-  if (resolution.code === 'PROJECT_NOT_FOUND') {
-    return null;
-  }
-  throw toWorkspaceResolutionError(resolution);
-}
