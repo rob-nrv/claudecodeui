@@ -7,8 +7,19 @@ import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils
 import { getArchivedProjectsWithSessions, getProjectSessionsPage, getProjectsWithSessions } from '@/modules/projects/services/projects-with-sessions-fetch.service.js';
 import { deleteOrArchiveProject, restoreArchivedProject } from '@/modules/projects/services/project-delete.service.js';
 import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/projects/services/project-star.service.js';
+import {
+  createLocalProjectRegistry,
+  createProjectRegistryRouter,
+  createProjectWorkspaceLocator,
+} from '@/modules/project-registry/index.js';
 
 const router = express.Router();
+
+// Project Registry (FT-M10): every project by id, including those without a copy on this machine.
+router.use('/registry', createProjectRegistryRouter({
+  registry: createLocalProjectRegistry(),
+  locator: createProjectWorkspaceLocator(),
+}));
 
 type AuthenticatedUser = {
   id?: number | string;
@@ -234,7 +245,8 @@ router.put('/:projectId/rename', (req, res) => {
     updateProjectDisplayName(projectId, displayName);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to rename project' });
+    res.status(error instanceof AppError ? error.statusCode : 500)
+      .json({ error: error instanceof Error ? error.message : 'Failed to rename project' });
   }
 });
 
@@ -258,7 +270,7 @@ router.post(
 
 /**
  * - `force` not set / false: archive project in DB only (`isArchived` = 1; hidden from active list).
- * - `force=true`: remove DB row, delete session rows for that path, remove all `*.jsonl` under the Claude project dir.
+ * - `force=true`: remove DB row, delete the project's session rows (by project id), remove their `*.jsonl` files.
  */
 router.delete(
   '/:projectId',

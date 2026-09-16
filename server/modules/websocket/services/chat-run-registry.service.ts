@@ -69,7 +69,9 @@ async function broadcastCanonicalSessionUpsert(appSessionId: string): Promise<vo
   }
 
   const projectPath = row.project_path;
-  const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+  // The session's own project (FT-M10); the client event needs that project's copy on this machine.
+  const owner = row.project_id ? projectsDb.getProjectById(row.project_id) : null;
+  const project = owner?.project_path ? { ...owner, project_path: owner.project_path } : null;
   const displayName = project?.custom_project_name?.trim()
     ? project.custom_project_name
     : await generateDisplayName(path.basename(projectPath ?? '') || (projectPath ?? ''), projectPath);

@@ -5,6 +5,19 @@ import { getConnection } from '@/modules/database/connection.js';
 import type { CreateProjectPathResult, ProjectRepositoryRow } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
+/** A project row with its checkpoint reference, read only by the Project Registry adapter (FT-M10). */
+export type ProjectRegistryRow = ProjectRepositoryRow & {
+    latest_checkpoint_snapshot_id: string | null;
+    latest_checkpoint_changes_digest: string | null;
+    latest_checkpoint_head_commit: string | null;
+    latest_checkpoint_node_id: string | null;
+    latest_checkpoint_at: number | null;
+};
+
+const REGISTRY_ROW_COLUMNS = `project_id, project_path, custom_project_name, isStarred, isArchived,
+    latest_checkpoint_snapshot_id, latest_checkpoint_changes_digest, latest_checkpoint_head_commit,
+    latest_checkpoint_node_id, latest_checkpoint_at`;
+
 function normalizeProjectDisplayName(projectPath: string, customProjectName: string | null): string {
     const trimmedCustomName = typeof customProjectName === 'string' ? customProjectName.trim() : '';
     if (trimmedCustomName.length > 0) {
@@ -86,26 +99,66 @@ export const projectsDb = {
         return row?.project_path ?? null;
     },
 
-    getProjectPaths(): ProjectRepositoryRow[] {
+    /**
+     * Active projects that have a working copy on this control plane — the
+     * rows the path-based project list (sidebar, Files, Shell) can open. A
+     * project without a copy here is not dropped: it is listed by the Project
+     * Registry (`listRegistryRows`).
+     */
+    getProjectPaths(): Array<ProjectRepositoryRow & { project_path: string }> {
         const db = getConnection();
         return db.prepare(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived
             FROM projects
-            WHERE isArchived = 0
-        `).all() as ProjectRepositoryRow[];
+            WHERE isArchived = 0 AND project_path IS NOT NULL
+        `).all() as Array<ProjectRepositoryRow & { project_path: string }>;
     },
 
     /**
      * Archived rows are queried separately so archive-focused UIs can present
      * hidden workspaces without reintroducing them into the active sidebar list.
+     * Like `getProjectPaths`, only rows with a copy on this control plane.
      */
-    getArchivedProjectPaths(): ProjectRepositoryRow[] {
+    getArchivedProjectPaths(): Array<ProjectRepositoryRow & { project_path: string }> {
         const db = getConnection();
         return db.prepare(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived
             FROM projects
-            WHERE isArchived = 1
-        `).all() as ProjectRepositoryRow[];
+            WHERE isArchived = 1 AND project_path IS NOT NULL
+        `).all() as Array<ProjectRepositoryRow & { project_path: string }>;
+    },
+
+    /** Every project whatever its copies, for the Project Registry adapter. */
+    listRegistryRows(filter: 'active' | 'archived' | 'all'): ProjectRegistryRow[] {
+        const where = filter === 'all' ? '' : `WHERE isArchived = ${filter === 'archived' ? 1 : 0}`;
+        return getConnection().prepare(`
+            SELECT ${REGISTRY_ROW_COLUMNS}
+            FROM projects
+            ${where}
+            ORDER BY rowid
+        `).all() as ProjectRegistryRow[];
+    },
+
+    getRegistryRow(projectId: string): ProjectRegistryRow | null {
+        const row = getConnection().prepare(`
+            SELECT ${REGISTRY_ROW_COLUMNS}
+            FROM projects
+            WHERE project_id = ?
+        `).get(projectId) as ProjectRegistryRow | undefined;
+        return row ?? null;
+    },
+
+    /**
+     * Registers a project that has no working copy on this control plane
+     * (FT-M10). Its id is minted here and never derived from any path; it can
+     * later be mapped to folders on RuntimeNodes by that id.
+     */
+    createProjectWithoutControlPlaneCopy(displayName: string): ProjectRegistryRow {
+        return getConnection().prepare(`
+            INSERT INTO projects (project_id, project_path, custom_project_name, isStarred, isArchived)
+            VALUES (?, NULL, ?, 0, 0)
+            RETURNING ${REGISTRY_ROW_COLUMNS}
+        `).get(randomUUID(), displayName) as ProjectRegistryRow;
     },
 
     getCustomProjectName(projectPath: string): string | null {

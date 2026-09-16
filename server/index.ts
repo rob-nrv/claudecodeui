@@ -14,7 +14,8 @@ import {
     initializeSessionsWatcher,
     providerRuntimeService,
 } from '@/modules/providers/index.js';
-import { createWebSocketServer } from '@/modules/websocket/index.js';
+import { createShellWorkspaceResolver, createWebSocketServer } from '@/modules/websocket/index.js';
+import { createProjectWorkspaceLocator } from '@/modules/project-registry/index.js';
 import {
     buildLocalServerMarker,
     createLocalServerMarkerStore,
@@ -153,6 +154,14 @@ const wss = createWebSocketServer(server, {
         },
         resolveClaudeProfileConfigDir: (profileId) => claudeProfilesDb.getById(profileId)?.configDirectory ?? null,
         resolveSessionClaudeProfileId: (sessionId) => sessionsDb.getSessionById(sessionId)?.claude_profile_id ?? null,
+        resolveWorkspace: createShellWorkspaceResolver({
+            getSession: (sessionId) => sessionsDb.getSessionById(sessionId),
+            isRemoteBinding: (runtimeNodeId) => runtimeNodesService.isRemoteBinding(runtimeNodeId),
+            resolveOnControlPlane: (() => {
+                const locator = createProjectWorkspaceLocator();
+                return (projectId: string) => locator.resolveOnControlPlane(projectId);
+            })(),
+        }),
     },
     getPluginPort,
 });

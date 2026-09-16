@@ -7,6 +7,8 @@ import type { Project, ProjectSession } from '../../../types/app';
 export type ShellInitMessage = {
   type: 'init';
   projectPath: string;
+  /** The project's id; the backend opens the terminal only in this machine's own copy of it. */
+  projectId: string | null;
   sessionId: string | null;
   hasSession: boolean;
   provider: string;

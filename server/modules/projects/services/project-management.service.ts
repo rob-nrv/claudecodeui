@@ -68,12 +68,13 @@ function resolveDisplayName(customName: string | null | undefined, projectPath: 
   return path.basename(projectPath) || projectPath;
 }
 
-function mapProjectRowToApiView(projectRow: ProjectRepositoryRow): ProjectApiView {
+/** `projectPath` is the resolved path the row was created or found by, so it is this row's control-plane copy. */
+function mapProjectRowToApiView(projectRow: ProjectRepositoryRow, projectPath: string): ProjectApiView {
   return {
     projectId: projectRow.project_id,
-    path: projectRow.project_path,
-    fullPath: projectRow.project_path,
-    displayName: resolveDisplayName(projectRow.custom_project_name, projectRow.project_path),
+    path: projectPath,
+    fullPath: projectPath,
+    displayName: resolveDisplayName(projectRow.custom_project_name, projectPath),
     customName: projectRow.custom_project_name,
     isArchived: Boolean(projectRow.isArchived),
     isStarred: Boolean(projectRow.isStarred),
@@ -131,14 +132,25 @@ export async function createProject(
   // Archived rows intentionally remain archived when reused, as requested.
   return {
     outcome: persistedProject.outcome,
-    project: mapProjectRowToApiView(projectRow),
+    project: mapProjectRowToApiView(projectRow, resolvedProjectPath),
   };
 }
 
 /**
  * Sets `projects.custom_project_name` for the given `projectId` (or clears it when empty).
+ * A project without a copy on this control plane has no folder name to fall
+ * back to (FT-M10), so its name can be changed but never cleared.
  */
 export function updateProjectDisplayName(projectId: string, newDisplayName: unknown): void {
   const trimmed = typeof newDisplayName === 'string' ? newDisplayName.trim() : '';
+  if (!trimmed) {
+    const project = projectsDb.getProjectById(projectId);
+    if (project && project.project_path === null) {
+      throw new AppError('This project has no folder on this machine, so it needs a name.', {
+        code: 'PROJECT_DISPLAY_NAME_REQUIRED',
+        statusCode: 400,
+      });
+    }
+  }
   projectsDb.updateCustomProjectNameById(projectId, trimmed.length > 0 ? trimmed : null);
 }

@@ -31,6 +31,7 @@ lower(hex(randomblob(6)))
 type TableInfoRow = {
   name: string;
   pk: number;
+  notnull: number;
 };
 
 const addColumnToTableIfNotExists = (
@@ -543,6 +544,98 @@ const rekeyRuntimeNodeWorkspacesByProjectId = (db: Database): void => {
   }
 };
 
+const PROJECT_CHECKPOINT_COLUMNS: Array<[string, string]> = [
+  ['latest_checkpoint_snapshot_id', 'TEXT'],
+  ['latest_checkpoint_changes_digest', 'TEXT'],
+  ['latest_checkpoint_head_commit', 'TEXT'],
+  ['latest_checkpoint_node_id', 'TEXT'],
+  ['latest_checkpoint_at', 'INTEGER'],
+];
+
+/**
+ * FT-M10: a project no longer needs a working copy on this control plane.
+ * SQLite cannot drop NOT NULL in place, so a table that still has it is
+ * rebuilt with every row copied as-is (same `project_id`, path, name, flags)
+ * and the checkpoint reference columns left NULL. The copy is verified before
+ * commit — same row count and every original (id, path) pair present — and
+ * any difference aborts the migration instead of starting on altered data.
+ * A table that is already nullable only gains missing columns.
+ */
+const allowProjectsWithoutControlPlaneCopy = (db: Database): void => {
+  const projectsTableInfo = getTableInfo(db, 'projects');
+  const projectPathColumn = projectsTableInfo.find((column) => column.name === 'project_path');
+  if (!projectPathColumn || projectPathColumn.notnull === 0) {
+    const columnNames = projectsTableInfo.map((column) => column.name);
+    for (const [columnName, columnType] of PROJECT_CHECKPOINT_COLUMNS) {
+      addColumnToTableIfNotExists(db, 'projects', columnNames, columnName, columnType);
+    }
+    return;
+  }
+
+  console.log('Running migration: Allowing projects without a control-plane copy');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN TRANSACTION');
+    db.exec('DROP TABLE IF EXISTS projects__new');
+    db.exec(PROJECTS_TABLE_SCHEMA_SQL.replace('IF NOT EXISTS projects (', 'projects__new ('));
+    db.exec(`
+      INSERT INTO projects__new (project_id, project_path, custom_project_name, isStarred, isArchived)
+      SELECT project_id, project_path, custom_project_name, isStarred, isArchived
+      FROM projects
+    `);
+    const before = (db.prepare('SELECT COUNT(*) AS count FROM projects').get() as { count: number }).count;
+    const preserved = (db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM projects old
+      JOIN projects__new copy ON copy.project_id = old.project_id AND copy.project_path IS old.project_path
+    `).get() as { count: number }).count;
+    const after = (db.prepare('SELECT COUNT(*) AS count FROM projects__new').get() as { count: number }).count;
+    if (before !== after || before !== preserved) {
+      throw new Error(`projects rebuild would not preserve every row (before=${before}, after=${after}, preserved=${preserved})`);
+    }
+    db.exec('DROP TABLE projects');
+    db.exec('ALTER TABLE projects__new RENAME TO projects');
+    db.exec('COMMIT');
+  } catch (migrationError) {
+    db.exec('ROLLBACK');
+    throw migrationError;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+};
+
+/**
+ * FT-M10: sessions (each row is one Run/Leg, and Tasks are chains of them)
+ * reference their project by id. Backfill uses the only provable relation —
+ * the session's `project_path` equals exactly one project's `project_path`,
+ * which is UNIQUE — and fills NULLs only, so a session already scoped is never
+ * re-scoped. A session whose path names no project stays NULL; nothing is
+ * guessed from similar paths, provider folders or runtime bindings.
+ */
+const scopeSessionsByProjectId = (db: Database): void => {
+  if (!tableExists(db, 'sessions')) {
+    return;
+  }
+  const columnNames = getTableInfo(db, 'sessions').map((column) => column.name);
+  addColumnToTableIfNotExists(
+    db,
+    'sessions',
+    columnNames,
+    'project_id',
+    'TEXT REFERENCES projects(project_id) ON DELETE SET NULL',
+  );
+  const scoped = db.prepare(`
+    UPDATE sessions
+    SET project_id = (SELECT projects.project_id FROM projects WHERE projects.project_path = sessions.project_path)
+    WHERE project_id IS NULL
+      AND project_path IS NOT NULL
+      AND EXISTS (SELECT 1 FROM projects WHERE projects.project_path = sessions.project_path)
+  `).run().changes;
+  if (scoped > 0) {
+    console.log(`Running migration: Scoped ${scoped} session(s) by project_id`);
+  }
+};
+
 const ensureProjectsForSessionPaths = (db: Database): void => {
   if (!tableExists(db, 'sessions')) {
     return;
@@ -622,10 +715,13 @@ export const runMigrations = (db: Database) => {
     addHandoffRuntimeNodeColumns(db);
     ensureProjectsForSessionPaths(db);
     rekeyRuntimeNodeWorkspacesByProjectId(db);
+    allowProjectsWithoutControlPlaneCopy(db);
+    scopeSessionsByProjectId(db);
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_provider_session_id ON sessions(provider_session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_is_archived ON sessions(isArchived)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_starred ON projects(isStarred)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_archived ON projects(isArchived)');

@@ -1134,7 +1134,8 @@ export type CreateCredentialResult = {
  */
 export type ProjectRepositoryRow = {
   project_id: string;
-  project_path: string;
+  /** This control plane's working copy; null when the project has no copy here (FT-M10). */
+  project_path: string | null;
   custom_project_name: string | null;
   isStarred: number;
   isArchived: number;

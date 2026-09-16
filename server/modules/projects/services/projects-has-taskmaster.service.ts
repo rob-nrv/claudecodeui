@@ -1,7 +1,7 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb } from '@/modules/database/index.js';
+import { createProjectWorkspaceLocator, resolveControlPlaneWorkspacePath } from '@/modules/project-registry/index.js';
 import { AppError } from '@/shared/utils.js';
 
 type TaskMasterTask = {
@@ -202,8 +202,12 @@ function normalizeTaskMasterInfo(taskMasterResult: TaskMasterDetectionResult | n
   };
 }
 
+// FT-M10: this machine's own copy, resolved explicitly for this machine's node.
+const controlPlaneWorkspaces = createProjectWorkspaceLocator();
+
 const defaultDependencies: GetProjectTaskMasterDependencies = {
-  resolveProjectPathById: (projectId: string): string | null => projectsDb.getProjectPathById(projectId),
+  resolveProjectPathById: (projectId: string): string | null =>
+    resolveControlPlaneWorkspacePath(controlPlaneWorkspaces, projectId),
   detectTaskMasterFolder,
 };
 

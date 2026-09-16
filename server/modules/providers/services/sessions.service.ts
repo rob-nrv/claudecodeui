@@ -94,6 +94,20 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
   }
 }
 
+/** A session's owning project by its recorded project id (FT-M10), cached per listing pass. */
+function readSessionProject(
+  projectId: string | null,
+  cache: Map<string, ReturnType<typeof projectsDb.getProjectById>>,
+): ReturnType<typeof projectsDb.getProjectById> {
+  if (!projectId) {
+    return null;
+  }
+  if (!cache.has(projectId)) {
+    cache.set(projectId, projectsDb.getProjectById(projectId));
+  }
+  return cache.get(projectId) ?? null;
+}
+
 /**
  * Archive rows need a stable project label even when the owning project is not
  * part of the active sidebar payload. This lightweight resolver keeps the
@@ -171,17 +185,10 @@ export const sessionsService = {
    */
   listRecentSessions(limit: number, offset: number): RecentSessionsPage {
     const page = sessionsDb.getRecentSessionsPage(limit, offset);
-    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
+    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectById>>();
     const conversations = page.sessions.map((session) => {
       const projectPath = session.project_path?.trim() ? session.project_path : null;
-      let project = null;
-
-      if (projectPath) {
-        if (!projectCache.has(projectPath)) {
-          projectCache.set(projectPath, projectsDb.getProjectPath(projectPath));
-        }
-        project = projectCache.get(projectPath) ?? null;
-      }
+      const project = readSessionProject(session.project_id, projectCache);
 
       return {
         sessionId: session.session_id,
@@ -410,7 +417,8 @@ export const sessionsService = {
     }
 
     const projectPath = session.project_path?.trim() ? session.project_path : null;
-    const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+    // The owning project is the session's recorded project id (FT-M10), not whichever project owns its folder now.
+    const project = session.project_id ? projectsDb.getProjectById(session.project_id) : null;
 
     return {
       sessionId: session.session_id,
@@ -441,18 +449,11 @@ export const sessionsService = {
    */
   listArchivedSessions(): ArchivedSessionListItem[] {
     const archivedSessions = sessionsDb.getArchivedSessions();
-    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
+    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectById>>();
 
     return archivedSessions.map((session) => {
       const projectPath = session.project_path?.trim() ? session.project_path : null;
-      let project = null;
-
-      if (projectPath) {
-        if (!projectCache.has(projectPath)) {
-          projectCache.set(projectPath, projectsDb.getProjectPath(projectPath));
-        }
-        project = projectCache.get(projectPath) ?? null;
-      }
+      const project = readSessionProject(session.project_id, projectCache);
 
       return {
         sessionId: session.session_id,

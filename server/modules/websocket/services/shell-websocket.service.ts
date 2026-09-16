@@ -5,6 +5,7 @@ import path from 'node:path';
 import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
+import type { ShellWorkspaceDecision } from '@/modules/websocket/services/shell-workspace.service.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
 
 type ShellIncomingMessage = {
@@ -13,6 +14,8 @@ type ShellIncomingMessage = {
   cols?: number;
   rows?: number;
   projectPath?: string;
+  /** The project the terminal is opened for (FT-M10); resolved server-side, see `resolveWorkspace`. */
+  projectId?: string;
   sessionId?: string;
   hasSession?: boolean;
   provider?: string;
@@ -125,6 +128,13 @@ type ShellWebSocketDependencies = {
    * override). Absent entirely on installs that haven't wired this up.
    */
   resolveSessionClaudeProfileId?: (sessionId: string) => string | null | undefined;
+  /**
+   * Resolves the folder a project or session shell opens in (FT-M10): this
+   * machine's own copy of the project by id, or a refusal (remote session, no
+   * copy here). `path: null` keeps the client folder for shells naming no
+   * registered project. Absent entirely on installs that haven't wired this up.
+   */
+  resolveWorkspace?: (input: { sessionId: string | null; projectId: string | null }) => ShellWorkspaceDecision;
   spawnPty?: typeof pty.spawn;
 };
 
@@ -325,8 +335,15 @@ export function handleShellConnection(
       }
 
       if (data.type === 'init') {
-        const projectPath = readString(data.projectPath, process.cwd());
         const sessionId = readString(data.sessionId) || null;
+        const workspace = dependencies.resolveWorkspace
+          ? dependencies.resolveWorkspace({ sessionId, projectId: readString(data.projectId) || null })
+          : { ok: true as const, path: null };
+        if (!workspace.ok) {
+          ws.send(JSON.stringify({ type: 'error', code: workspace.code, message: workspace.message }));
+          return;
+        }
+        const projectPath = workspace.path ?? readString(data.projectPath, process.cwd());
         const hasSession = readBoolean(data.hasSession);
         const provider = readString(data.provider, 'claude');
         const initialCommand = readString(data.initialCommand);

@@ -164,7 +164,7 @@ test('removeWorktree reports branchDeleted=false when branch deletion fails', as
 
 test('removeWorktree archives an active project linked to the removed path', async () => {
   const { runner } = createFakeRunner();
-  const linkedProject: ProjectRepositoryRow = {
+  const linkedProject: ProjectRepositoryRow & { project_path: string } = {
     project_id: 'project-1',
     project_path: '/home/user/repo-worktrees/feature-login',
     custom_project_name: 'repo · feature/login',
@@ -188,7 +188,7 @@ test('removeWorktree archives an active project linked to the removed path', asy
 
 test('removeWorktree reports archival failure after successful Git removal', async () => {
   const { runner } = createFakeRunner();
-  const linkedProject: ProjectRepositoryRow = {
+  const linkedProject: ProjectRepositoryRow & { project_path: string } = {
     project_id: 'project-1',
     project_path: '/home/user/repo-worktrees/feature-login',
     custom_project_name: 'feature/login',

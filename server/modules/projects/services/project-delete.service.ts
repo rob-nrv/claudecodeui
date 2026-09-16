@@ -39,10 +39,10 @@ async function unlinkJsonlIfExists(filePath: string): Promise<void> {
 }
 
 /**
- * Loads all session rows for the project path and removes each distinct `jsonl_path` file on disk.
+ * Loads all session rows of the project (by id, FT-M10) and removes each distinct `jsonl_path` file on disk.
  */
-export async function deleteSessionJsonlFilesForProjectPath(projectPath: string): Promise<void> {
-  const sessions = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath);
+export async function deleteSessionJsonlFilesForProject(projectId: string): Promise<void> {
+  const sessions = sessionsDb.getSessionsByProjectIdIncludingArchived(projectId);
   const paths = uniqueJsonlPathsFromSessions(sessions);
 
   for (const filePath of paths) {
@@ -52,8 +52,8 @@ export async function deleteSessionJsonlFilesForProjectPath(projectPath: string)
 
 /**
  * - **Soft delete** (`force` false): set `isArchived` on the `projects` row (hide from the active list; DB only).
- * - **Force** (`force` true): for each session row for that `project_path`, delete the file at `jsonl_path`
- *   (when set), then remove session rows and the `projects` row.
+ * - **Force** (`force` true): for each session row of that `project_id`, delete the file at `jsonl_path`
+ *   (when set), then remove session rows and the `projects` row. Works for a project with no copy on this machine.
  */
 export async function deleteOrArchiveProject(projectId: string, force: boolean): Promise<void> {
   const row = projectsDb.getProjectById(projectId);
@@ -69,8 +69,8 @@ export async function deleteOrArchiveProject(projectId: string, force: boolean):
     return;
   }
 
-  await deleteSessionJsonlFilesForProjectPath(row.project_path);
-  sessionsDb.deleteSessionsByProjectPath(row.project_path);
+  await deleteSessionJsonlFilesForProject(projectId);
+  sessionsDb.deleteSessionsByProjectId(projectId);
   projectsDb.deleteProjectById(projectId);
 }
 

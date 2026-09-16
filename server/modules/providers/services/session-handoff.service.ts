@@ -572,6 +572,7 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
       runtimeNodesService.assertNodeCanRun(targetRuntimeNodeId, {
         provider: input.provider,
         claudeProfileId: targetClaudeProfileId,
+        projectId: source.project_id,
         projectPath: source.project_path?.trim() ?? '',
       });
 
@@ -614,6 +615,7 @@ export function createSessionHandoffService(dependencies: SessionHandoffServiceD
         targetRuntimeNodeId,
         targetName: sessionName,
         projectPath,
+        projectId: source.project_id,
         sourceSessionId: source.session_id,
         taskRootSessionId,
         sourceProvider,

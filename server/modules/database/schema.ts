@@ -86,13 +86,26 @@ CREATE TABLE IF NOT EXISTS notification_channel_endpoints (
 );
 `;
 
+/**
+ * Projects (Project Registry, FT-M10). `project_id` is the global identity.
+ * `project_path` is only THIS control plane's working copy and is NULL when
+ * the project has no copy here; such a project must carry its own name.
+ * `latest_checkpoint_*` reference the last durable Workspace Snapshot and stay
+ * NULL until snapshot storage exists — never filled with a guess.
+ */
 export const PROJECTS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY NOT NULL,
-    project_path TEXT NOT NULL UNIQUE,
+    project_path TEXT UNIQUE,
     custom_project_name TEXT DEFAULT NULL,
     isStarred BOOLEAN DEFAULT 0,
-    isArchived BOOLEAN DEFAULT 0
+    isArchived BOOLEAN DEFAULT 0,
+    latest_checkpoint_snapshot_id TEXT,
+    latest_checkpoint_changes_digest TEXT,
+    latest_checkpoint_head_commit TEXT,
+    latest_checkpoint_node_id TEXT,
+    latest_checkpoint_at INTEGER,
+    CHECK (project_path IS NOT NULL OR length(trim(COALESCE(custom_project_name, ''))) > 0)
 );
 `;
 

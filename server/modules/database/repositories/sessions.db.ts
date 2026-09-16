@@ -6,6 +6,14 @@ type SessionRow = {
   session_id: string;
   provider: string;
   provider_session_id: string | null;
+  /**
+   * The project this session (one Run/Leg) belongs to (FT-M10): its global
+   * identity, independent of any folder. Recorded once — at creation, or by
+   * the migration from an exact project-path match — and never re-scoped
+   * afterwards. NULL only when no project could be proven.
+   */
+  project_id: string | null;
+  /** The folder the session ran in on this control plane, as recorded; provenance, not identity. */
   project_path: string | null;
   jsonl_path: string | null;
   custom_name: string | null;
@@ -38,7 +46,7 @@ type RecentSessionsPage = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, claude_profile_id, runtime_node_id, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, project_id, project_path, jsonl_path, custom_name, model, effort, claude_profile_id, runtime_node_id, isArchived, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -107,8 +115,9 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
     // First, ensure the project path is recorded in the projects table,
-    // since it's a foreign key in the sessions table.
-    projectsDb.createProjectPath(normalizedProjectPath);
+    // since it's a foreign key in the sessions table. The session is scoped
+    // by the id of the project that owns this path.
+    const projectId = projectsDb.createProjectPath(normalizedProjectPath).project?.project_id ?? null;
 
     const existing = db
       .prepare(
@@ -123,6 +132,7 @@ export const sessionsDb = {
         `UPDATE sessions SET
            provider = ?,
            updated_at = COALESCE(?, CURRENT_TIMESTAMP),
+           project_id = COALESCE(project_id, ?),
            project_path = ?,
            jsonl_path = ?,
            isArchived = 0,
@@ -134,6 +144,7 @@ export const sessionsDb = {
       ).run(
         provider,
         updatedAtValue,
+        projectId,
         normalizedProjectPath,
         jsonlPath ?? null,
         customName ?? null,
@@ -147,12 +158,13 @@ export const sessionsDb = {
     // keyed by the provider-native id for both columns. The ON CONFLICT path
     // covers legacy rows that predate the provider_session_id mapping.
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
+      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_id, project_path, jsonl_path, isArchived, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
        ON CONFLICT(session_id) DO UPDATE SET
          provider = excluded.provider,
          provider_session_id = excluded.provider_session_id,
          updated_at = excluded.updated_at,
+         project_id = COALESCE(sessions.project_id, excluded.project_id),
          project_path = excluded.project_path,
          jsonl_path = excluded.jsonl_path,
          isArchived = 0,
@@ -166,6 +178,7 @@ export const sessionsDb = {
       provider,
       providerSessionId,
       customName ?? null,
+      projectId,
       normalizedProjectPath,
       jsonlPath ?? null,
       createdAtValue,
@@ -193,6 +206,10 @@ export const sessionsDb = {
    * `runtimeNodeId` follows the same rule (FT-M07): the caller resolves the
    * RuntimeNode that owns this execution once, and it is never rewritten. A
    * different runtime is always a different session row.
+   *
+   * `projectId` (FT-M10) scopes the row explicitly — a handoff target joins
+   * its Task's project. Without it, the row belongs to the project that owns
+   * `projectPath` on this machine.
    */
   createAppSession(
     sessionId: string,
@@ -201,16 +218,18 @@ export const sessionsDb = {
     customName?: string,
     claudeProfileId?: string | null,
     runtimeNodeId?: string | null,
+    projectId?: string | null,
   ): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
-    projectsDb.createProjectPath(normalizedProjectPath);
+    const pathProjectId = projectsDb.createProjectPath(normalizedProjectPath).project?.project_id ?? null;
+    const scopedProjectId = projectId ?? pathProjectId;
 
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, claude_profile_id, runtime_node_id, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, customName ?? null, normalizedProjectPath, claudeProfileId ?? null, runtimeNodeId ?? null);
+      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_id, project_path, jsonl_path, claude_profile_id, runtime_node_id, isArchived, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run(sessionId, provider, customName ?? null, scopedProjectId, normalizedProjectPath, claudeProfileId ?? null, runtimeNodeId ?? null);
 
     return sessionId;
   },
@@ -427,7 +446,7 @@ export const sessionsDb = {
       .prepare(
         `SELECT sessions.*
          FROM sessions
-         LEFT JOIN projects ON projects.project_path = sessions.project_path
+         LEFT JOIN projects ON projects.project_id = sessions.project_id
          WHERE ${visibilityClause}
          ORDER BY julianday(COALESCE(sessions.updated_at, sessions.created_at)) DESC,
                   sessions.session_id DESC
@@ -438,7 +457,7 @@ export const sessionsDb = {
       .prepare(
         `SELECT COUNT(*) AS count
          FROM sessions
-         LEFT JOIN projects ON projects.project_path = sessions.project_path
+         LEFT JOIN projects ON projects.project_id = sessions.project_id
          WHERE ${visibilityClause}`
       )
       .get() as { count: number } | undefined;
@@ -536,6 +555,43 @@ export const sessionsDb = {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     db.prepare(`DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
+  },
+
+  /**
+   * Project-scoped readers (FT-M10): a project's sessions are the rows that
+   * carry its id, whether or not this control plane has a copy of it and
+   * wherever each run executed.
+   */
+  getSessionsByProjectIdIncludingArchived(projectId: string): SessionRow[] {
+    const rows = getConnection()
+      .prepare(`SELECT ${SESSION_ROW_COLUMNS} FROM sessions WHERE project_id = ?`)
+      .all(projectId) as SessionRow[];
+    return normalizeSessionRows(rows);
+  },
+
+  getSessionsByProjectIdPage(projectId: string, limit: number, offset: number): SessionRow[] {
+    const rows = getConnection()
+      .prepare(
+        `SELECT ${SESSION_ROW_COLUMNS}
+         FROM sessions
+         WHERE project_id = ?
+           AND isArchived = 0
+         ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(projectId, limit, offset) as SessionRow[];
+    return normalizeSessionRows(rows);
+  },
+
+  countSessionsByProjectId(projectId: string): number {
+    const row = getConnection()
+      .prepare('SELECT COUNT(*) AS count FROM sessions WHERE project_id = ? AND isArchived = 0')
+      .get(projectId) as { count: number } | undefined;
+    return Number(row?.count ?? 0);
+  },
+
+  deleteSessionsByProjectId(projectId: string): void {
+    getConnection().prepare('DELETE FROM sessions WHERE project_id = ?').run(projectId);
   },
 
   getSessionName(sessionId: string, provider: string): string | null {

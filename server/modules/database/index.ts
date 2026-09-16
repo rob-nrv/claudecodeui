@@ -13,6 +13,7 @@ export { notificationPreferencesDb } from '@/modules/database/repositories/notif
 export { providerModelsDb } from '@/modules/database/repositories/provider-models.js';
 // projectsDb: used by Projects, Worktrees, Git, WebSocket, and notification modules to persist and resolve project records.
 export { projectsDb } from '@/modules/database/repositories/projects.db.js';
+export type { ProjectRegistryRow } from '@/modules/database/repositories/projects.db.js';
 export { pushSubscriptionsDb } from '@/modules/database/repositories/push-subscriptions.js';
 // queuedMessagesDb: server-side single-slot "send after this run finishes" queue (FT-M03).
 export { queuedMessagesDb } from '@/modules/database/repositories/queued-messages.db.js';

@@ -13,12 +13,13 @@ import {
   listWorktreePorcelainEntries,
 } from '@/modules/worktrees/services/worktree-git.service.js';
 
-function mapRowToProjectView(row: ProjectRepositoryRow): WorktreeProjectView {
+/** `projectPath` is the worktree path the row was looked up by, so it is this row's control-plane copy. */
+function mapRowToProjectView(row: ProjectRepositoryRow, projectPath: string): WorktreeProjectView {
   return {
     projectId: row.project_id,
-    path: row.project_path,
-    fullPath: row.project_path,
-    displayName: row.custom_project_name || path.basename(row.project_path),
+    path: projectPath,
+    fullPath: projectPath,
+    displayName: row.custom_project_name || path.basename(projectPath),
     isStarred: Boolean(row.isStarred),
     sessions: [],
     sessionMeta: { hasMore: false, total: 0 },
@@ -59,7 +60,7 @@ export async function openWorktreeAsProject(
       await projects.restoreProject(existingRow.project_id);
     }
     const refreshedRow = projects.getProjectByPath(normalizedWorktreePath) ?? existingRow;
-    return mapRowToProjectView(refreshedRow);
+    return mapRowToProjectView(refreshedRow, normalizedWorktreePath);
   }
 
   const created = await projects.createProject({
@@ -81,5 +82,5 @@ export async function openWorktreeAsProject(
     });
   }
 
-  return mapRowToProjectView(row);
+  return mapRowToProjectView(row, normalizedWorktreePath);
 }

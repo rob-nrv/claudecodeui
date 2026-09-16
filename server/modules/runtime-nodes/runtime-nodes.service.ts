@@ -97,7 +97,8 @@ type SessionBinding = {
   provider: string;
   runtime_node_id: string | null;
   claude_profile_id: string | null;
-  project_path: string | null;
+  /** The session's project (FT-M10); its mapping on the bound node is looked up by this id, never by a path. */
+  project_id: string | null;
   provider_session_id: string | null;
 };
 
@@ -311,6 +312,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
 
   const describeWorkspace = async (view: RuntimeNodeView, project: ProjectRepositoryRow): Promise<RuntimeNodeWorkspaceView> => {
     if (view.isLocal) {
+      if (project.project_path === null) {
+        return { state: 'unavailable', reason: 'no_control_plane_copy', verifiedAt: null };
+      }
       return (await isDirectory(project.project_path))
         ? { state: 'available', reason: null, verifiedAt: null }
         : { state: 'unavailable', reason: 'project_folder_missing', verifiedAt: null };
@@ -356,7 +360,11 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
     return project;
   };
 
-  /** The project a session or run names by this machine's copy path; null when it is not a registered project. */
+  /**
+   * The project owning this machine's copy at a path, for a NEW run whose
+   * caller only knows the folder it chose here; null when it is not a
+   * registered project. Existing sessions carry their project id instead.
+   */
   const projectIdForPath = (projectPath: string | null | undefined): string | null => {
     const trimmed = projectPath?.trim() ?? '';
     return trimmed ? projectsDb.getProjectPath(trimmed)?.project_id ?? null : null;
@@ -399,6 +407,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       throw new AppError('Runtime node not found.', { code: 'RUNTIME_NODE_NOT_FOUND', statusCode: 404 });
     }
     if (record.isLocal) {
+      if (project.project_path === null) {
+        return workspaceState('unmapped', 'no_control_plane_copy');
+      }
       let observation: WorkspaceObservation;
       try {
         observation = await inspectLocalWorkspace(project.project_path);
@@ -559,7 +570,10 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
      * verified. A no-op for the local node. Consumed by the providers module
      * right after `resolveExecutionTarget`.
      */
-    assertNodeCanRun(nodeId: string, run: { provider: string; claudeProfileId: string | null; projectPath: string }): void {
+    assertNodeCanRun(
+      nodeId: string,
+      run: { provider: string; claudeProfileId: string | null; projectId?: string | null; projectPath?: string },
+    ): void {
       const node = runtimeNodesDb.getById(nodeId);
       if (!node || node.isLocal) {
         return;
@@ -576,7 +590,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
           statusCode: 409,
         });
       }
-      const projectId = projectIdForPath(run.projectPath);
+      const projectId = run.projectId ?? projectIdForPath(run.projectPath);
       const mapping = projectId ? runtimeNodeWorkspacesDb.get(nodeId, projectId) : null;
       if (!mapping || mapping.status !== 'verified') {
         throw new AppError(`This project has no verified folder on "${node.label}".`, {
@@ -625,7 +639,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       if (session.provider !== 'claude' || session.claude_profile_id) {
         return refused('RUNTIME_NODE_PROVIDER_UNSUPPORTED', `"${record.label}" cannot run this session's provider or account.`, bound);
       }
-      const projectId = projectIdForPath(session.project_path);
+      const projectId = session.project_id;
       const mapping = projectId ? runtimeNodeWorkspacesDb.get(bound, projectId) : null;
       if (!projectId || !mapping || mapping.status !== 'verified') {
         return refused('RUNTIME_NODE_WORKSPACE_UNAVAILABLE', `This project has no verified folder on "${record.label}".`, bound);
@@ -655,7 +669,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
           statusCode: 409,
         });
       }
-      const projectId = projectIdForPath(session.project_path);
+      const projectId = session.project_id;
       const mapping = projectId ? runtimeNodeWorkspacesDb.get(record.nodeId, projectId) : null;
       if (!mapping || !session.provider_session_id) {
         return { messages: [], total: 0, hasMore: false, offset: page.offset, limit: page.limit };

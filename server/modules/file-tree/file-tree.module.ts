@@ -5,7 +5,7 @@ import os from 'node:os';
 import mime from 'mime-types';
 import multer from 'multer';
 
-import { projectsDb } from '@/modules/database/index.js';
+import { createProjectWorkspaceLocator, resolveControlPlaneWorkspacePath } from '@/modules/project-registry/index.js';
 import { createFileTreeRouter } from '@/modules/file-tree/file-tree.routes.js';
 import { createFileTreeService } from '@/modules/file-tree/file-tree.service.js';
 import type {
@@ -56,13 +56,16 @@ const fileTreeFileSystem: FileTreeFileSystem = {
   createReadStream: (filePath) => fs.createReadStream(filePath),
 };
 
+// FT-M10: the control plane's own copy of a project, resolved explicitly for this machine's node.
+const controlPlaneWorkspaces = createProjectWorkspaceLocator();
+
 /**
  * Database boundary used only by File Tree production composition.
  * The Database module is consumed through its barrel; services and routes see
  * only the narrow project-path lookup contract.
  */
 const fileTreeProjects: FileTreeProjectGateway = {
-  getProjectPathById: (projectId) => projectsDb.getProjectPathById(projectId),
+  getProjectPathById: (projectId) => resolveControlPlaneWorkspacePath(controlPlaneWorkspaces, projectId),
 };
 
 /**

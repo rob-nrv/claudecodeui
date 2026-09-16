@@ -32,6 +32,8 @@ type CreateHandoffTargetInput = {
   targetRuntimeNodeId?: string | null;
   targetName: string;
   projectPath: string;
+  /** The Task's project (FT-M10): the target joins the source's project, whatever folder it runs in. */
+  projectId?: string | null;
   sourceSessionId: string;
   taskRootSessionId: string;
   sourceProvider: string;
@@ -75,6 +77,7 @@ export const sessionHandoffsDb = {
         input.targetName,
         input.targetClaudeProfileId,
         input.targetRuntimeNodeId ?? null,
+        input.projectId ?? null,
       );
 
       db.prepare(
