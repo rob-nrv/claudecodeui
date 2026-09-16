@@ -2,6 +2,8 @@ export {
   generateDisplayName,
   getProjectsWithSessions,
 } from './services/projects-with-sessions-fetch.service.js';
+// getRegistryProjectsWithSessions / getProjectSessionsPage: used by the hosted-relay module, which lists projects by id without any folder.
+export { getProjectSessionsPage, getRegistryProjectsWithSessions } from './services/projects-with-sessions-fetch.service.js';
 export { updateProjectDisplayName } from './services/project-management.service.js';
 // createProject: used by the worktrees module to register a worktree directory as a switchable project.
 export { createProject } from './services/project-management.service.js';

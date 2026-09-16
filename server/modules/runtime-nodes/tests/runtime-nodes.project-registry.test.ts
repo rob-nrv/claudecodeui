@@ -150,7 +150,7 @@ test('runs route by the session\'s project id to the bound node\'s own folder, i
     const listing = await service.listNodes({ projectId: pixelOnlyId });
     const local = listing.nodes.find((node) => node.isLocal);
     assert.deepEqual(local?.workspace, { state: 'unavailable', reason: 'no_control_plane_copy', verifiedAt: null }, 'no false local availability');
-    const localState = await service.inspectProjectWorkspace(listing.localNodeId, pixelOnlyId);
+    const localState = await service.inspectProjectWorkspace(service.getLocalNodeId(), pixelOnlyId);
     assert.deepEqual([localState.state, localState.reason, localState.git], ['unmapped', 'no_control_plane_copy', null]);
   });
 });

@@ -44,6 +44,7 @@ const normalizeProviderParam = (value: unknown): string =>
   readPathParam(value, 'provider').trim().toLowerCase();
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]{1,120}$/;
+const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 const parseSessionId = (value: unknown): string => {
   const sessionId = readPathParam(value, 'sessionId').trim();
@@ -793,7 +794,11 @@ router.post(
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
     const claudeProfileId = typeof body.claudeProfileId === 'string' ? body.claudeProfileId : undefined;
     const runtimeNodeId = parseOptionalRuntimeNodeId(body.runtimeNodeId);
-    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, claudeProfileId, runtimeNodeId);
+    const projectId = typeof body.projectId === 'string' && PROJECT_ID_PATTERN.test(body.projectId) ? body.projectId : null;
+    if (body.projectId !== undefined && projectId === null) {
+      throw new AppError('projectId is invalid.', { code: 'INVALID_PROJECT_ID', statusCode: 400 });
+    }
+    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, claudeProfileId, runtimeNodeId, projectId);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );

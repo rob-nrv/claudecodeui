@@ -16,7 +16,7 @@ import {
   type RegisteredProject,
   type WorkspaceResolution,
 } from '@/modules/project-registry/project-registry.contract.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, isHostedRelayRole } from '@/shared/utils.js';
 
 function toRegisteredProject(row: ProjectRegistryRow): RegisteredProject {
   const customName = row.custom_project_name?.trim() ?? '';
@@ -82,7 +82,9 @@ const NO_REMOTE_LINKS: RuntimeNodeLinkPresence = { isUsable: () => false };
 export function createProjectWorkspaceLocator(presence: RuntimeNodeLinkPresence = NO_REMOTE_LINKS) {
   const resolve = (target: { projectId: string; nodeId: string }): WorkspaceResolution => {
     const project = projectsDb.getProjectById(target.projectId);
-    const node = runtimeNodesDb.getById(target.nodeId);
+    const found = runtimeNodesDb.getById(target.nodeId);
+    // A local row in a relay's database never stands for this process.
+    const node = found?.isLocal && isHostedRelayRole() ? null : found;
     const credential = node && !node.isLocal ? runtimeNodeCredentialsDb.getByNodeId(target.nodeId) : null;
     const mapping = project && node && !node.isLocal ? runtimeNodeWorkspacesDb.get(target.nodeId, target.projectId) : null;
     return resolveProjectWorkspace({
@@ -106,6 +108,12 @@ export function createProjectWorkspaceLocator(presence: RuntimeNodeLinkPresence 
     resolveOnControlPlane(projectId: string): WorkspaceResolution {
       const localNodeId = runtimeNodesDb.getLocal()?.nodeId ?? 'local';
       const project = projectsDb.getProjectById(projectId);
+      if (isHostedRelayRole()) {
+        // A Hosted Relay keeps no working copies: even a path recorded in its database is never used here.
+        return project
+          ? { ok: false, projectId, nodeId: localNodeId, code: 'WORKSPACE_NOT_ON_NODE', reason: 'hosted_relay' }
+          : { ok: false, projectId, nodeId: localNodeId, code: 'PROJECT_NOT_FOUND', reason: null };
+      }
       return resolveProjectWorkspace({
         projectId,
         nodeId: localNodeId,

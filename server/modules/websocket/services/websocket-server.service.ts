@@ -9,11 +9,18 @@ import { handleShellConnection } from '@/modules/websocket/services/shell-websoc
 import { handleDesktopNotificationsConnection } from '@/modules/notifications/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
+/** Close code for a socket path this server does not offer (a Hosted Relay has no shell, plugins or desktop notifications). */
+export const WEBSOCKET_PATH_UNSUPPORTED_CLOSE_CODE = 4404;
+
 type WebSocketServerDependencies = {
   verifyClient: Parameters<typeof verifyWebSocketClient>[1];
   chat: Parameters<typeof handleChatConnection>[2];
-  shell: Parameters<typeof handleShellConnection>[1];
-  getPluginPort: Parameters<typeof handlePluginWsProxy>[2];
+  /** Omitted by a Hosted Relay: a terminal on the relay host is never offered. */
+  shell?: Parameters<typeof handleShellConnection>[1];
+  /** Omitted by a Hosted Relay: plugin processes never run there. */
+  getPluginPort?: Parameters<typeof handlePluginWsProxy>[2];
+  /** Defaults to true; a Hosted Relay has no desktop to notify. */
+  desktopNotifications?: boolean;
   /** Accepted, already-verified RuntimeNode link connections (FT-M08). */
   handleNodeLinkConnection?: (ws: WebSocket, request: AuthenticatedWebSocketRequest) => void;
   /** Lets remote access close browser sockets when their remote session is revoked or expires (FT-M08). */
@@ -114,8 +121,14 @@ export function createWebSocketServer(
 
     dependencies.onBrowserConnection?.(ws, incomingRequest);
 
+    const refuseUnsupported = () => ws.close(WEBSOCKET_PATH_UNSUPPORTED_CLOSE_CODE, 'Not available on this server');
+
     if (pathname === '/shell') {
-      handleShellConnection(ws, dependencies.shell);
+      if (dependencies.shell) {
+        handleShellConnection(ws, dependencies.shell);
+      } else {
+        refuseUnsupported();
+      }
       return;
     }
 
@@ -125,12 +138,20 @@ export function createWebSocketServer(
     }
 
     if (pathname === '/desktop-notifications') {
-      handleDesktopNotificationsConnection(ws, incomingRequest);
+      if (dependencies.desktopNotifications === false) {
+        refuseUnsupported();
+      } else {
+        handleDesktopNotificationsConnection(ws, incomingRequest);
+      }
       return;
     }
 
     if (pathname.startsWith('/plugin-ws/')) {
-      handlePluginWsProxy(ws, pathname, dependencies.getPluginPort);
+      if (dependencies.getPluginPort) {
+        handlePluginWsProxy(ws, pathname, dependencies.getPluginPort);
+      } else {
+        refuseUnsupported();
+      }
       return;
     }
 

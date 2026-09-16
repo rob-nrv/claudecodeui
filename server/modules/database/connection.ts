@@ -16,6 +16,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { APP_CONFIG_TABLE_SCHEMA_SQL } from '@/modules/database/schema.js';
+import { isHostedRelayRole } from '@/shared/utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,6 +68,8 @@ function migrateLegacyDatabase(targetPath: string): void {
   const legacyPath = resolveLegacyDatabasePath();
 
   if (targetPath === legacyPath) return;
+  // A Hosted Relay starts from its own empty database, never from accounts and secrets left in an install folder.
+  if (isHostedRelayRole()) return;
   if (fs.existsSync(targetPath)) return;
   if (!fs.existsSync(legacyPath)) return;
 

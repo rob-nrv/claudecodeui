@@ -10,5 +10,8 @@ export { sessionsService } from './services/sessions.service.js';
 // providerModelsService: used by Commands to list models and resolve the active session model.
 export { providerModelsService } from './services/provider-models.service.js';
 
+// providerRoutes: mounted by the hosted-relay module behind its route allowlist (server/index.ts mounts the file directly).
+export { default as providerRoutes } from './provider.routes.js';
+
 export { initializeSessionsWatcher } from './services/sessions-watcher.service.js';
 export { closeSessionsWatcher } from './services/sessions-watcher.service.js';

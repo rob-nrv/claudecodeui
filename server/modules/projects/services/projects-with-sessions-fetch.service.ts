@@ -245,6 +245,31 @@ export async function getProjectsWithSessions(
 }
 
 /**
+ * Every active registered project by id (FT-M11), for a server that keeps no
+ * working copies: nothing is synchronized from disk, no folder is read, and
+ * no path is returned even when one was recorded.
+ */
+export function getRegistryProjectsWithSessions(
+  options: Pick<GetProjectsWithSessionsOptions, 'sessionsLimit' | 'sessionsOffset'> = {},
+): ProjectListItem[] {
+  return projectsDb.listRegistryRows('active').map((row) => {
+    const sessionsPage = readProjectSessionsPage(row.project_id, {
+      limit: options.sessionsLimit,
+      offset: options.sessionsOffset,
+    });
+    return {
+      projectId: row.project_id,
+      path: '',
+      displayName: row.custom_project_name?.trim() || row.project_id,
+      fullPath: '',
+      isStarred: Boolean(row.isStarred),
+      sessions: sessionsPage.sessions,
+      sessionMeta: { hasMore: sessionsPage.hasMore, total: sessionsPage.total },
+    };
+  });
+}
+
+/**
  * Reads archived projects from DB and includes every session row for each
  * project path, because an archived workspace should surface all preserved
  * conversation history in the archive view regardless of each session's flag.

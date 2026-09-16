@@ -12,12 +12,14 @@ import type {
   LLMProvider,
   NormalizedMessage,
 } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, isHostedRelayRole } from '@/shared/utils.js';
 
 type CreateAppSessionResult = {
   sessionId: string;
   provider: LLMProvider;
-  projectPath: string;
+  projectId: string | null;
+  /** Null when the session runs on a remote node for a project with no copy on this server. */
+  projectPath: string | null;
   sessionName: string;
   claudeProfileId: string | null;
   /** The RuntimeNode this new session is permanently bound to. */
@@ -263,13 +265,32 @@ export const sessionsService = {
     initialMessage: string,
     claudeProfileId?: string | null,
     runtimeNodeId?: string | null,
+    projectId?: string | null,
   ): CreateAppSessionResult {
-    const normalizedProjectPath = projectPath.trim();
-    if (!normalizedProjectPath) {
-      throw new AppError('projectPath is required.', {
+    const requestedProjectPath = projectPath.trim();
+    const requestedProjectId = projectId?.trim() || null;
+    if (requestedProjectPath && requestedProjectId) {
+      throw new AppError('Send either projectPath or projectId, not both.', {
+        code: 'PROJECT_TARGET_AMBIGUOUS',
+        statusCode: 400,
+      });
+    }
+    if (!requestedProjectPath && !requestedProjectId) {
+      throw new AppError('projectPath or projectId is required.', {
         code: 'PROJECT_PATH_REQUIRED',
         statusCode: 400,
       });
+    }
+    if (requestedProjectPath && isHostedRelayRole()) {
+      // Recording a folder here would register a workspace on the relay host.
+      throw new AppError('The hosted relay keeps no project folders; start the session by project id on a runtime node.', {
+        code: 'HOSTED_RELAY_PROJECT_PATH_UNSUPPORTED',
+        statusCode: 400,
+      });
+    }
+    const project = requestedProjectId ? projectsDb.getProjectById(requestedProjectId) : null;
+    if (requestedProjectId && !project) {
+      throw new AppError('Project not found.', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
     }
 
     let resolvedClaudeProfileId: string | null = null;
@@ -290,24 +311,39 @@ export const sessionsService = {
     runtimeNodesService.assertNodeCanRun(resolvedRuntimeNodeId, {
       provider,
       claudeProfileId: resolvedClaudeProfileId,
-      projectPath: normalizedProjectPath,
+      projectId: project?.project_id,
+      projectPath: requestedProjectPath,
     });
+
+    // By id, this machine's node needs this machine's own copy; a run is never started in some other folder.
+    let recordedProjectPath: string | null = requestedProjectPath || null;
+    if (project && !runtimeNodesService.isRemoteBinding(resolvedRuntimeNodeId)) {
+      if (!project.project_path) {
+        throw new AppError('This project has no working copy on the chosen runtime node.', {
+          code: 'WORKSPACE_NOT_ON_NODE',
+          statusCode: 409,
+        });
+      }
+      recordedProjectPath = project.project_path;
+    }
 
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
     sessionsDb.createAppSession(
       sessionId,
       provider,
-      normalizedProjectPath,
+      recordedProjectPath,
       sessionName,
       resolvedClaudeProfileId,
       resolvedRuntimeNodeId,
+      project?.project_id ?? null,
     );
 
     return {
       sessionId,
       provider,
-      projectPath: normalizedProjectPath,
+      projectId: project?.project_id ?? sessionsDb.getSessionById(sessionId)?.project_id ?? null,
+      projectPath: recordedProjectPath,
       sessionName,
       claudeProfileId: resolvedClaudeProfileId,
       runtimeNodeId: resolvedRuntimeNodeId,
@@ -416,7 +452,8 @@ export const sessionsService = {
       });
     }
 
-    const projectPath = session.project_path?.trim() ? session.project_path : null;
+    // A Hosted Relay names projects by id only and never returns a folder, recorded or not.
+    const projectPath = isHostedRelayRole() ? '' : session.project_path?.trim() ? session.project_path : null;
     // The owning project is the session's recorded project id (FT-M10), not whichever project owns its folder now.
     const project = session.project_id ? projectsDb.getProjectById(session.project_id) : null;
 
@@ -430,12 +467,12 @@ export const sessionsService = {
       isArchived: Boolean(session.isArchived),
       claudeProfileId: session.claude_profile_id ?? null,
       runtimeNodeId: session.runtime_node_id ?? null,
-      project: project && projectPath
+      project: project && projectPath !== null
         ? {
             projectId: project.project_id,
             path: projectPath,
             fullPath: projectPath,
-            displayName: resolveProjectDisplayName(projectPath, project.custom_project_name),
+            displayName: resolveProjectDisplayName(projectPath || null, project.custom_project_name),
             isStarred: Boolean(project.isStarred),
             isArchived: Boolean(project.isArchived),
           }

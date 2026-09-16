@@ -209,21 +209,28 @@ export const sessionsDb = {
    *
    * `projectId` (FT-M10) scopes the row explicitly — a handoff target joins
    * its Task's project. Without it, the row belongs to the project that owns
-   * `projectPath` on this machine.
+   * `projectPath` on this machine. A null `projectPath` (FT-M11: a session
+   * running on a remote node for a project with no copy here) records no
+   * folder at all and requires `projectId`.
    */
   createAppSession(
     sessionId: string,
     provider: string,
-    projectPath: string,
+    projectPath: string | null,
     customName?: string,
     claudeProfileId?: string | null,
     runtimeNodeId?: string | null,
     projectId?: string | null,
   ): string {
     const db = getConnection();
-    const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
+    if (projectPath === null && !projectId) {
+      throw new Error('A session without a project path must name its project id.');
+    }
+    const normalizedProjectPath = projectPath === null ? null : normalizeProjectPathForProvider(provider, projectPath);
 
-    const pathProjectId = projectsDb.createProjectPath(normalizedProjectPath).project?.project_id ?? null;
+    const pathProjectId = normalizedProjectPath === null
+      ? null
+      : projectsDb.createProjectPath(normalizedProjectPath).project?.project_id ?? null;
     const scopedProjectId = projectId ?? pathProjectId;
 
     db.prepare(

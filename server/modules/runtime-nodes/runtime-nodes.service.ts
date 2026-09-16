@@ -57,7 +57,7 @@ import type {
   RuntimeNodeView,
   RuntimeNodeWorkspaceView,
 } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, isHostedRelayRole } from '@/shared/utils.js';
 
 /** A probe younger than this is reused instead of re-running the CLIs. */
 const PROBE_REUSE_MS = 60_000;
@@ -83,14 +83,20 @@ type RuntimeNodesServiceDependencies = {
   isDirectory?: (directory: string) => Promise<boolean>;
   /** Read-only inspection of this machine's own copy of a project (FT-M09); injectable for tests. */
   inspectLocalWorkspace?: (folder: string) => Promise<WorkspaceObservation>;
+  /**
+   * False in a Hosted Relay (FT-M11): this process is never a RuntimeNode, so
+   * nothing is registered, implied or executed locally. Read at call time.
+   */
+  hasLocalNode?: () => boolean;
 };
 
 type RuntimeNodeListing = {
-  localNodeId: string;
+  /** Null in a Hosted Relay, which has no node of its own. */
+  localNodeId: string | null;
   nodes: RuntimeNodeView[];
 };
 
-type SessionRuntimeCheck = { ok: true } | { ok: false; code: 'RUNTIME_NODE_MISMATCH' };
+type SessionRuntimeCheck = { ok: true } | { ok: false; code: 'RUNTIME_NODE_MISMATCH' | 'HOSTED_RELAY_NO_LOCAL_NODE' };
 
 type SessionBinding = {
   session_id: string;
@@ -107,6 +113,8 @@ export type SessionExecutionTarget =
   | { kind: 'local' }
   | { kind: 'remote'; nodeId: string; nodeLabel: string; cwd: string; projectId: string }
   | { kind: 'refused'; code: string; message: string; alternatives: Array<{ nodeId: string; label: string }> };
+
+const RELAY_HAS_NO_LOCAL_NODE_MESSAGE = 'The hosted relay never runs sessions itself; choose an enrolled runtime node.';
 
 function toNodeLabel(hostname: string): string {
   return hostname.trim().slice(0, MAX_LABEL_LENGTH) || FALLBACK_LOCAL_LABEL;
@@ -138,6 +146,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
     ?? ((): HostFacts => ({ hostname: os.hostname(), platform: process.platform, arch: process.arch }));
   const isDirectory = dependencies.isDirectory ?? isExistingDirectory;
   const inspectLocalWorkspace = dependencies.inspectLocalWorkspace ?? ((folder: string) => inspectWorkspaceFolder(folder));
+  const hasLocalNode = dependencies.hasLocalNode ?? (() => !isHostedRelayRole());
   let inFlightProbe: Promise<void> | null = null;
   const inFlightRemoteProbes = new Map<string, Promise<void>>();
   /** Resource Governor reports, valid only for the link that produced them. */
@@ -163,6 +172,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
   const enrollment = createRuntimeNodeEnrollmentService({ store: runtimeNodeEnrollmentsDb, now });
 
   const registerLocal = (runtimeVersion: string | null): RuntimeNodeRecord => {
+    if (!hasLocalNode()) {
+      throw new AppError(RELAY_HAS_NO_LOCAL_NODE_MESSAGE, { code: 'HOSTED_RELAY_NO_LOCAL_NODE', statusCode: 409 });
+    }
     const facts = readHostFacts();
     return runtimeNodesDb.upsertLocal(createNodeId(), {
       label: toNodeLabel(facts.hostname),
@@ -173,8 +185,16 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
   };
 
   // Lazily registers when startup registration has not happened (tests, CLI
-  // tools), so a new execution can always be bound to a real node id.
-  const getLocalNode = (): RuntimeNodeRecord => runtimeNodesDb.getLocal() ?? registerLocal(null);
+  // tools), so a new execution can always be bound to a real node id. A Hosted
+  // Relay has no local node and never registers one.
+  const getLocalNode = (): RuntimeNodeRecord | null =>
+    (hasLocalNode() ? runtimeNodesDb.getLocal() ?? registerLocal(null) : null);
+
+  // A local row in a relay's database (copied from a control plane) is never shown or used as a node.
+  const listRecords = (): RuntimeNodeRecord[] =>
+    (hasLocalNode() ? runtimeNodesDb.list() : runtimeNodesDb.list().filter((record) => !record.isLocal));
+
+  const relayRefusal = (code: string) => new AppError(RELAY_HAS_NO_LOCAL_NODE_MESSAGE, { code, statusCode: 409 });
 
   const toView = (record: RuntimeNodeRecord, at: number, credential: RuntimeNodeCredentialRecord | null): RuntimeNodeView => {
     const capabilities = parseStoredRuntimeNodeCapabilities(record.capabilitiesJson);
@@ -233,8 +253,7 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
   const listAlternatives = (excludeNodeId: string | null): Array<{ nodeId: string; label: string }> => {
     const at = now();
     const credentials = credentialsByNode();
-    return runtimeNodesDb
-      .list()
+    return listRecords()
       .map((record) => toView(record, at, credentials.get(record.nodeId) ?? null))
       .filter((view) => view.canExecute && view.nodeId !== excludeNodeId)
       .map((view) => ({ nodeId: view.nodeId, label: view.label }));
@@ -247,7 +266,11 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       return inFlightProbe;
     }
 
-    const nodeId = getLocalNode().nodeId;
+    const local = getLocalNode();
+    if (!local) {
+      return Promise.resolve();
+    }
+    const nodeId = local.nodeId;
     const run = async (): Promise<void> => {
       try {
         const outcomes = await probeCapabilities();
@@ -407,6 +430,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       throw new AppError('Runtime node not found.', { code: 'RUNTIME_NODE_NOT_FOUND', statusCode: 404 });
     }
     if (record.isLocal) {
+      if (!hasLocalNode()) {
+        throw relayRefusal('HOSTED_RELAY_NO_LOCAL_NODE');
+      }
       if (project.project_path === null) {
         return workspaceState('unmapped', 'no_control_plane_copy');
       }
@@ -456,9 +482,13 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       return toView(registerLocal(runtimeVersion), now(), null);
     },
 
-    /** The stable id of this machine's node. */
+    /** The stable id of this machine's node; a Hosted Relay has none and refuses. */
     getLocalNodeId(): string {
-      return getLocalNode().nodeId;
+      const local = getLocalNode();
+      if (!local) {
+        throw relayRefusal('HOSTED_RELAY_NO_LOCAL_NODE');
+      }
+      return local.nodeId;
     },
 
     /**
@@ -481,10 +511,10 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       };
 
       const probes: Promise<void>[] = [];
-      if (shouldProbe(local.lastSeenAt)) {
+      if (local && shouldProbe(local.lastSeenAt)) {
         probes.push(probeLocalNode());
       }
-      for (const record of runtimeNodesDb.list()) {
+      for (const record of listRecords()) {
         const info = record.isLocal ? null : link.getLinkInfo(record.nodeId);
         const capabilities = parseStoredRuntimeNodeCapabilities(record.capabilitiesJson);
         const lastProbeAt = capabilities.reduce<number | null>(
@@ -499,13 +529,13 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
 
       const at = now();
       const credentials = credentialsByNode();
-      const nodes = runtimeNodesDb.list().map((record) => toView(record, at, credentials.get(record.nodeId) ?? null));
+      const nodes = listRecords().map((record) => toView(record, at, credentials.get(record.nodeId) ?? null));
       if (project) {
         for (const node of nodes) {
           node.workspace = await describeWorkspace(node, project);
         }
       }
-      return { localNodeId: local.nodeId, nodes };
+      return { localNodeId: local?.nodeId ?? null, nodes };
     },
 
     /**
@@ -527,6 +557,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
           });
         }
         if (node.isLocal) {
+          if (!local) {
+            throw relayRefusal('HOSTED_RELAY_NO_LOCAL_NODE');
+          }
           return node.nodeId;
         }
         const credential = runtimeNodeCredentialsDb.getByNodeId(node.nodeId);
@@ -553,14 +586,15 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
         return node.nodeId;
       }
 
-      if (runtimeNodesDb.countNotRevoked() === 1) {
+      // Only the control plane's own node can ever be implied; a relay always needs an explicit choice.
+      if (local && runtimeNodesDb.countNotRevoked() === 1) {
         return local.nodeId;
       }
 
-      throw new AppError('Choose which runtime node runs the new session.', {
-        code: 'RUNTIME_NODE_REQUIRED',
-        statusCode: 400,
-      });
+      throw new AppError(
+        local ? 'Choose which runtime node runs the new session.' : `Choose which runtime node runs the new session. ${RELAY_HAS_NO_LOCAL_NODE_MESSAGE}`,
+        { code: 'RUNTIME_NODE_REQUIRED', statusCode: 400 },
+      );
     },
 
     /**
@@ -575,6 +609,9 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
       run: { provider: string; claudeProfileId: string | null; projectId?: string | null; projectPath?: string },
     ): void {
       const node = runtimeNodesDb.getById(nodeId);
+      if (node?.isLocal && !hasLocalNode()) {
+        throw relayRefusal('HOSTED_RELAY_NO_LOCAL_NODE');
+      }
       if (!node || node.isLocal) {
         return;
       }
@@ -605,10 +642,14 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
      * keeps the pre-FT-M07 behavior of running locally.
      */
     checkSessionRunsHere(sessionRuntimeNodeId: string | null | undefined): SessionRuntimeCheck {
+      const local = getLocalNode();
+      if (!local) {
+        return { ok: false, code: 'HOSTED_RELAY_NO_LOCAL_NODE' };
+      }
       if (!sessionRuntimeNodeId) {
         return { ok: true };
       }
-      return sessionRuntimeNodeId === getLocalNode().nodeId
+      return sessionRuntimeNodeId === local.nodeId
         ? { ok: true }
         : { ok: false, code: 'RUNTIME_NODE_MISMATCH' };
     },
@@ -622,7 +663,15 @@ export function createRuntimeNodesService(dependencies: RuntimeNodesServiceDepen
      */
     resolveSessionExecution(session: SessionBinding): SessionExecutionTarget {
       const bound = session.runtime_node_id;
-      if (!bound || bound === getLocalNode().nodeId) {
+      const local = getLocalNode();
+      if (!local && (!bound || runtimeNodesDb.getById(bound)?.isLocal)) {
+        return refused(
+          'HOSTED_RELAY_NO_LOCAL_NODE',
+          'This session is not bound to an enrolled runtime node, and the hosted relay never runs sessions itself.',
+          bound,
+        );
+      }
+      if (!bound || bound === local?.nodeId) {
         return { kind: 'local' };
       }
       const record = runtimeNodesDb.getById(bound);

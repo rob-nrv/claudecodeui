@@ -41,6 +41,26 @@ import type {
  */
 export const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
 
+/**
+ * What this process is (FT-M11). `control-plane` is the user's CloudCLI server,
+ * which is also its own local RuntimeNode. `hosted-relay` coordinates browsers
+ * and outbound RuntimeNodes and never executes anything itself: it has no
+ * local node, no local workspace and no local provider runtime.
+ */
+export type ServerRole = 'control-plane' | 'hosted-relay';
+
+let serverRole: ServerRole = 'control-plane';
+
+/** Set once by the Hosted Relay entrypoint before it serves anything; tests may reset it. */
+export function setServerRole(role: ServerRole): void {
+  serverRole = role;
+}
+
+/** Read at call time by modules whose "no target" default would otherwise mean this machine. */
+export function isHostedRelayRole(): boolean {
+  return serverRole === 'hosted-relay';
+}
+
 // ---------------------------
 //----------------- NORMALIZED MESSAGE HELPER INPUT TYPES ------------
 /**

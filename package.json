@@ -31,6 +31,8 @@
     "preserver": "node scripts/promote-dist-server.mjs recover",
     "server": "node dist-server/server/index.js",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.ts",
+    "relay": "node dist-server/server/relay.js",
+    "relay:dev": "tsx --tsconfig server/tsconfig.json server/relay.ts",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.ts",
     "client": "vite",
     "desktop": "electron electron/main.js",
