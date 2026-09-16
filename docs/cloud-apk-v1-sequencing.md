@@ -77,7 +77,7 @@ Related: [portable-workspace-contract.md](portable-workspace-contract.md), [andr
 | --- | --- | --- |
 | Project Registry | FT-M10 (local-first): projects may exist without a control-plane copy, sessions reference `project_id`, a nullable `latestCheckpoint` reference, a `ProjectRegistry` port with a local SQLite adapter and an in-memory fake. Still open: project ids are minted by one control plane, no hosted adapter, no membership model, no sidebar view of projects without a copy here. | Hosted registry, all-nodes-offline project view in the UI, Continue Here |
 | Workspace Sync | No payload capture, storage, encryption, transport, apply or initial checkout. The restore-time filesystem checks in the contract doc are unimplemented. | Continuing on another node after the source goes offline |
-| Hosted Relay | Every coordination path terminates in the user's control plane (browser auth, node link, dispatch, Queue, approvals, notifications, history reads). No hosted presence. | Opening CloudCLI with the PC off |
+| Hosted Relay | FT-M11: a relay mode exists and is verified on loopback ([hosted-relay.md](hosted-relay.md)): no local node, no fallback, projects by id, outbound nodes, TLS gateway, web client. Not deployed: provider, domain, public auth, edge rate limiting and AGPL posture are open. Notifications are not pushed from the relay. | Opening CloudCLI with the PC off (deployment only) |
 | Sessions | History lives on the node that ran it (remote) or in `~/.claude` (local). Nothing durable in the cloud. | Reading a finished session while its node is offline |
 | APK | No CloudCLI cockpit app (see §7). | Product APK V1 |
 
