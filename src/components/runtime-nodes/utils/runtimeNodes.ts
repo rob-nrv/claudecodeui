@@ -105,7 +105,8 @@ export type RuntimeNodeView = {
 };
 
 export type RuntimeNodesListing = {
-  localNodeId: string;
+  /** Null on a Hosted Relay (FT-M11), which is never a RuntimeNode itself. */
+  localNodeId: string | null;
   nodes: RuntimeNodeView[];
 };
 
@@ -128,6 +129,7 @@ export type RuntimeNodeStatusDisplay = {
 /** Why a new session cannot be created on the current target. */
 export type RunTargetBlock =
   | 'choose_node'
+  | 'no_node'
   | 'node_missing'
   | 'node_unavailable'
   | 'provider_unsupported'
@@ -137,6 +139,7 @@ export type RunTargetBlock =
 /** English defaults for blocked targets; `{{label}}` is the target node's label. */
 export const RUN_TARGET_BLOCK_DEFAULTS: Record<RunTargetBlock, string> = {
   choose_node: 'Choose where this session runs.',
+  no_node: 'No runtime node is enrolled yet. Enroll one in Settings > Remote access to run sessions.',
   node_missing: 'The node you chose is no longer available. Choose another.',
   node_unavailable: '{{label}} cannot run a session right now. Nothing will be sent to another node.',
   provider_unsupported: '{{label}} only runs Claude sessions.',
@@ -206,7 +209,17 @@ export function resolveRunTarget(
     node = resolveCreationTarget(listing);
     implied = true;
     if (!node) {
-      return none(selectable.length > 1 ? 'choose_node' : null);
+      if (selectable.length > 1) {
+        return none('choose_node');
+      }
+      if (listing.localNodeId !== null) {
+        return none(null);
+      }
+      // A Hosted Relay has no node of its own: its only node is shown with its real state, or none is enrolled.
+      if (selectable.length === 0) {
+        return none('no_node');
+      }
+      node = selectable[0];
     }
   }
 

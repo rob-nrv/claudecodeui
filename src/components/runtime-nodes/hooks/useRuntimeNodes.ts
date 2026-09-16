@@ -16,7 +16,7 @@ const FOCUS_REFRESH_MIN_INTERVAL_MS = 15_000;
 
 const isListing = (value: unknown): value is RuntimeNodesListing =>
   Boolean(value)
-  && typeof (value as RuntimeNodesListing).localNodeId === 'string'
+  && (typeof (value as RuntimeNodesListing).localNodeId === 'string' || (value as RuntimeNodesListing).localNodeId === null)
   && Array.isArray((value as RuntimeNodesListing).nodes);
 
 /**

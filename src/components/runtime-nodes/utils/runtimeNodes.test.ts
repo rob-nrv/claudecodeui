@@ -99,3 +99,16 @@ test('a chosen node that cannot run now blocks creation instead of falling throu
   assert.equal(resolveRunTarget(listing([local, remote({ workspace: { state: 'unmapped', reason: null, verifiedAt: null } })]), 'nas', 'claude').blocked, 'workspace_unmapped');
   assert.equal(resolveRunTarget(listing([local, remote({ workspace: { state: 'unavailable', reason: 'rejected_by_node', verifiedAt: null } })]), 'nas', 'claude').blocked, 'workspace_unavailable');
 });
+
+test('hosted relay listing: no local node, nothing implied beyond real nodes, and an empty fleet says so', () => {
+  const relayListing = (nodes: RuntimeNodeView[]): RuntimeNodesListing => ({ localNodeId: null, nodes });
+  const offline = remote({ canExecute: false, availability: { state: 'unavailable', reason: 'link_offline', lastSeenAt: null, freshUntil: null } });
+
+  assert.deepEqual(resolveRunTarget(relayListing([]), null, 'claude'), { nodeId: null, node: null, isRemote: false, implied: false, blocked: 'no_node' });
+  const onlyOffline = resolveRunTarget(relayListing([offline]), null, 'claude');
+  assert.deepEqual([onlyOffline.nodeId, onlyOffline.isRemote, onlyOffline.blocked], ['nas', true, 'node_unavailable'], 'the one node reads with its real state');
+  const online = resolveRunTarget(relayListing([remote()]), null, 'claude');
+  assert.deepEqual([online.nodeId, online.isRemote, online.implied, online.blocked], ['nas', true, true, null], 'sent explicitly to the server');
+  assert.equal(resolveRunTarget(relayListing([remote(), remote({ nodeId: 'pixel' })]), null, 'claude').blocked, 'choose_node');
+  assert.equal(resolveRunTarget(relayListing([remote({ enrollment: 'revoked', canExecute: false })]), null, 'claude').blocked, 'no_node', 'revoked nodes are gone');
+});

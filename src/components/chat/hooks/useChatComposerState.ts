@@ -947,7 +947,11 @@ export function useChatComposerState({
             method: 'POST',
             body: JSON.stringify({
               provider,
-              projectPath: resolvedProjectPath,
+              // A project with no copy on this server (always, on a Hosted Relay)
+              // is named by id; the server never records a folder for it.
+              ...(resolvedProjectPath
+                ? { projectPath: resolvedProjectPath }
+                : { projectId: selectedProject.projectId }),
               initialMessage: messageContent,
               // Ignored server-side for non-Claude providers; the backend
               // resolves and validates it once, at creation, and that
