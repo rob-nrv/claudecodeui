@@ -75,7 +75,7 @@ Related: [portable-workspace-contract.md](portable-workspace-contract.md), [andr
 
 | Area | Debt | Blocks |
 | --- | --- | --- |
-| Project Registry | Project id is per control plane. A project needs a control-plane copy. Sessions are keyed by path. No durable checkpoint reference. No membership model. | All-nodes-offline project view, projects without a PC copy, Continue Here |
+| Project Registry | FT-M10 (local-first): projects may exist without a control-plane copy, sessions reference `project_id`, a nullable `latestCheckpoint` reference, a `ProjectRegistry` port with a local SQLite adapter and an in-memory fake. Still open: project ids are minted by one control plane, no hosted adapter, no membership model, no sidebar view of projects without a copy here. | Hosted registry, all-nodes-offline project view in the UI, Continue Here |
 | Workspace Sync | No payload capture, storage, encryption, transport, apply or initial checkout. The restore-time filesystem checks in the contract doc are unimplemented. | Continuing on another node after the source goes offline |
 | Hosted Relay | Every coordination path terminates in the user's control plane (browser auth, node link, dispatch, Queue, approvals, notifications, history reads). No hosted presence. | Opening CloudCLI with the PC off |
 | Sessions | History lives on the node that ran it (remote) or in `~/.claude` (local). Nothing durable in the cloud. | Reading a finished session while its node is offline |

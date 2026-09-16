@@ -46,9 +46,43 @@ Consequences:
 - a re-created project with the same path does not silently inherit an old
   mapping.
 
-Still path-bound (known debt, not changed by FT-M09): `sessions.project_path`
-references `projects.project_path`, and a project must currently have a copy on
-the control plane. Both are for the Project Registry mission to lift.
+## Project Registry (FT-M10)
+
+A project is its `project_id` everywhere; paths are node-local knowledge.
+
+- **Projects without a copy here.** `projects.project_path` is nullable: it is
+  only THIS control plane's working copy. A project with no copy here must carry
+  its own name. It is listed by `GET /api/projects/registry` (every project,
+  with `controlPlaneCopy: present|absent`, never a path) and can be registered
+  with `POST /api/projects/registry`. The path-based list (`GET /api/projects`,
+  the sidebar) still shows only projects with a copy here.
+- **Sessions reference their project by id.** `sessions.project_id` is written
+  at creation (a handoff target inherits its Task's project) and never
+  re-scoped. The migration fills it only from an exact `project_path` match; a
+  session whose folder names no project stays NULL. `project_path` stays as
+  provenance. Project listings, the conversation feed, session details,
+  deletion and remote run routing all use the id.
+- **`ProjectRegistry` port.** Identity and metadata only (`listProjects`,
+  `getProject`, `registerProject`, `listNodeAssociations` — associations carry
+  no node path). A local SQLite adapter and an in-memory fake pass one contract
+  suite; a hosted adapter implements the same port later.
+- **`latestCheckpoint`.** Nullable reference (snapshot id, changes digest, head
+  commit, source node, time). Nothing writes it before snapshot storage exists;
+  a missing or malformed field makes it null, never a partial checkpoint.
+- **Workspace resolution.** One project on one explicitly chosen node: this
+  machine's copy for the local node, the verified mapping for a remote node, or
+  an explicit refusal — `PROJECT_NOT_FOUND`, `RUNTIME_NODE_NOT_FOUND`,
+  `RUNTIME_NODE_NOT_ENROLLED`, `RUNTIME_NODE_REVOKED`, `RUNTIME_NODE_OFFLINE`,
+  `WORKSPACE_NOT_ON_NODE`, `WORKSPACE_UNAVAILABLE`. A refusal never carries a
+  path, and no other node's folder is ever substituted.
+- **Files, Git, TaskMaster, Worktrees, Shell** run on this machine, so they
+  resolve this machine's copy by project id. A project without one is refused
+  (`WORKSPACE_NOT_ON_NODE`, 409) instead of reading a missing project (404) or
+  the current directory. A Shell for a session bound to a remote node is refused
+  (`RUNTIME_NODE_REMOTE_SESSION`). Shells that name no registered project (login,
+  usage) keep their client folder as before.
+- **Identity** is unchanged from FT-M09: a remap never re-baselines
+  `git_root_commits`, and a mismatch reads as `identity_mismatch` on that node.
 
 ## Local workspace state
 
@@ -193,8 +227,10 @@ against its **own** filesystem before writing anything, and block instead of gue
 - Building snapshot payloads (content capture), storage transport, upload.
 - Applying a snapshot, initial checkout of a missing workspace, Git transport
   between nodes.
-- Project Registry outside this control plane; projects without a control-plane
-  copy; sessions referencing projects by id.
+- A hosted Project Registry adapter (the port and a local adapter exist, FT-M10).
+- A sidebar view of projects without a copy on this control plane (they are
+  listed by the registry API only).
+- Writing `latestCheckpoint` (the nullable reference exists, FT-M10).
 - Per-project exclude configuration storage (the policy type exists; nothing
   persists user patterns yet).
 - "Continue Here" / Runtime Handoff.
