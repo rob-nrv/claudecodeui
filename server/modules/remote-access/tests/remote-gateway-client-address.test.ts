@@ -13,6 +13,9 @@ test('only the entry the local terminator appended is trusted as the client addr
   assert.equal(resolveTerminatorClientAddress(undefined, '127.0.0.1'), '127.0.0.1');
   assert.equal(resolveTerminatorClientAddress('not-an-ip', '127.0.0.1'), '127.0.0.1', 'garbage never becomes a rate-limit key');
   assert.equal(resolveTerminatorClientAddress('203.0.113.9, ', '127.0.0.1'), '127.0.0.1');
+  assert.equal(resolveTerminatorClientAddress('1.2.3.4', '203.0.113.50'), '203.0.113.50', 'a non-loopback peer is not a trusted proxy');
+  assert.equal(resolveTerminatorClientAddress('1.2.3.4', '::1'), '1.2.3.4');
+  assert.equal(resolveTerminatorClientAddress('1.2.3.4', '::ffff:127.0.0.1'), '1.2.3.4');
 });
 
 async function keyFor(mode: 'external-tls', headers: Record<string, string>): Promise<string> {

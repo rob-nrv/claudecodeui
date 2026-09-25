@@ -1,6 +1,6 @@
 # Hosted Relay (FT-M11)
 
-**Status:** implemented and verified automatically on loopback; the public-deploy technical gaps (client address behind the terminator, CSP, AGPL source offer) are closed and the VPS runbook is ready in [`deploy/hosted-relay/`](../deploy/hosted-relay/README.md). **Not deployed, not validated on a public origin.** Public deployment waits for the owner inputs in [§7](#7-public-deploy-gate).
+**Status:** implemented and verified automatically on loopback; the public-deploy technical gaps (client address behind the terminator, CSP, AGPL source offer) are closed and the VPS runbook is ready in [`deploy/hosted-relay/`](../deploy/hosted-relay/README.md), with a Linux install check, a black-box remote smoke and an authenticated real-Chrome journey (`smoke-browser.mjs`). **Not deployed, not validated on a public origin.** Public deployment waits for the owner inputs in [§7](#7-public-deploy-gate).
 
 Related: [remote-access-and-runtime-nodes.md](remote-access-and-runtime-nodes.md), [cloud-apk-v1-sequencing.md](cloud-apk-v1-sequencing.md), [portable-workspace-contract.md](portable-workspace-contract.md).
 
@@ -78,6 +78,7 @@ npm run build && npm run relay
 | Surface disclosure | Unsupported paths answer 401 before authentication | — |
 | Logs | No tokens, cookies or node keys logged; URL tokens redacted | Log retention and access policy (journald defaults on the VPS) |
 | Data at rest | SQLite on the relay host; node paths come only from each node's verification | Daily WAL-safe backup script + timer provided; off-host copy and disk encryption are owner decisions |
+| Onboarding | The host onboarding (Git identity, provider login) cannot exist on a relay; `/api/user/onboarding-status` reports it complete, so a paired browser reaches the app instead of a step it cannot finish (found by the browser smoke) | — |
 | Multi-user | Single-user model inherited (every signed-in user sees every project and node) | Membership model if more than one person uses a relay |
 
 ## 5. No-fallback proof
@@ -99,7 +100,7 @@ npm run build && npm run relay
   - 7(c): modified versions must be marked as such and not presented as the original;
   - 7(d): no use of the names "Siteboon" / "CloudCLI" for publicity without written permission;
   - 7(e): no trademark rights in "CloudCLI", "CloudCLI UI" or "Siteboon".
-- **§13 (Remote Network Interaction):** a modified version offered to users over a network must prominently offer those users the Corresponding Source of that version. This fork is modified; the login page's "open source" link points to the upstream repository, not to this version's source. The relay therefore serves `GET /source` (public, 302 to `CLOUDCLI_SOURCE_URL`, https only, 404 if unset) and warns at startup when it is unset. A visible in-page link is a UI change left out of this lot.
+- **§13 (Remote Network Interaction):** a modified version offered to users over a network must prominently offer those users the Corresponding Source of that version. This fork is modified; the login page's "open source" link points to the upstream repository, not to this version's source. The relay therefore serves `GET /source` (public, 302 to `CLOUDCLI_SOURCE_URL`, https only, 404 if unset) and warns at startup when it is unset. The login and pairing page's source link now points to `/source` (this server's own offer) instead of the upstream repository; there is no default URL, so an unset value is an explicit 404 rather than a false pointer. The sidebar and About links to the upstream repository are unchanged.
 
 ## 7. Public deploy gate
 

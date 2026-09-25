@@ -32,19 +32,3 @@ export function buildRelayContentSecurityPolicy(publicOrigin: string | null, htm
     "frame-ancestors 'none'",
   ].join('; ');
 }
-
-/**
- * AGPL-3.0 §13: where this modified version's Corresponding Source is offered.
- * Operator-supplied (CLOUDCLI_SOURCE_URL); anything but a plain https URL is
- * treated as unset so the endpoint can never redirect somewhere unexpected.
- */
-export function readCorrespondingSourceUrl(env: NodeJS.ProcessEnv): string | null {
-  const raw = env.CLOUDCLI_SOURCE_URL?.trim();
-  if (!raw) return null;
-  try {
-    const url = new URL(raw);
-    return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}

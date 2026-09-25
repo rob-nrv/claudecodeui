@@ -381,6 +381,18 @@ test('startup: the relay is healthy, holds no RuntimeNode and serves the product
   assert.equal((await fetch(`${relay.gatewayUrl}/assets/missing.js`)).status, 404);
 });
 
+test('a fresh account is never trapped in host onboarding: Git identity and provider login cannot exist on a relay', { concurrency: false }, async () => {
+  const userId = (relay.database.userDb.getFirstUser() as { id: number }).id;
+  relay.database.getConnection().prepare('UPDATE users SET has_completed_onboarding = 0 WHERE id = ?').run(userId);
+  assert.equal(relay.database.userDb.hasCompletedOnboarding(userId), false, 'precondition: the stored flag is not set');
+
+  for (const response of [await remote('/api/user/onboarding-status'), await local('/api/user/onboarding-status')]) {
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { hasCompletedOnboarding: boolean }).hasCompletedOnboarding, true);
+  }
+  assert.equal((await remote('/api/user/git-config')).status, 501, 'the step it would gate on is unavailable');
+});
+
 test('no local execution: workspace, shell, upload, plugin and provider surfaces answer 501 and touch nothing on the host', { concurrency: false }, async () => {
   // Even a project row pointing at a real folder on the relay host (a copied database) is never used.
   relay.database.projectsDb.createProjectPath(canaryFolder);

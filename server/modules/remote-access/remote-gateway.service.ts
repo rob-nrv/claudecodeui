@@ -48,9 +48,14 @@ function describeListenError(error: unknown): string {
  * terminator appends the peer it saw as the LAST X-Forwarded-For entry, so
  * that entry is the only one a client cannot choose; earlier ones are ignored.
  * An absent or malformed header falls back to the TCP peer (the terminator
- * itself), never to a client-supplied value.
+ * itself), never to a client-supplied value. Headers from a non-loopback peer
+ * are ignored.
  */
 export function resolveTerminatorClientAddress(forwardedFor: string | string[] | undefined, peer: string | undefined): string {
+  // Defence in depth: the listener is loopback-bound, but a header from any other peer is never believed.
+  if (!peer || !/^(127\.|::1$|::ffff:127\.)/.test(peer)) {
+    return peer || 'unknown';
+  }
   const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor;
   const last = header?.split(',').pop()?.trim();
   return last && isIP(last) ? last : peer || 'unknown';

@@ -20,7 +20,8 @@ import {
   HOSTED_RELAY_USER_ROUTES,
   hostedRelayUnsupported,
 } from '@/modules/hosted-relay/hosted-relay-routes.js';
-import { buildRelayContentSecurityPolicy, readCorrespondingSourceUrl } from '@/modules/hosted-relay/hosted-relay-csp.js';
+import { buildRelayContentSecurityPolicy } from '@/modules/hosted-relay/hosted-relay-csp.js';
+import { createCorrespondingSourceHandler } from '@/shared/corresponding-source.js';
 import { AppError, setServerRole } from '@/shared/utils.js';
 
 import { buildLoopbackOrigins, isLoopbackHost } from '../../../shared/networkHosts.js';
@@ -128,14 +129,7 @@ export function createHostedRelay(options: HostedRelayOptions) {
   });
 
   // AGPL-3.0 §13 offer: public, credential-free, and never a redirect to anything but the operator's https URL.
-  const correspondingSourceUrl = readCorrespondingSourceUrl(options.env);
-  app.get('/source', (_req, res) => {
-    if (!correspondingSourceUrl) {
-      res.status(404).type('text/plain').send('Corresponding Source location is not configured on this relay.');
-      return;
-    }
-    res.redirect(302, correspondingSourceUrl);
-  });
+  app.get('/source', createCorrespondingSourceHandler(options.env));
 
   app.use('/api/runtime-node-link', runtimeNodeLinkRoutes);
   app.use('/api', validateApiKey);
@@ -147,6 +141,12 @@ export function createHostedRelay(options: HostedRelayOptions) {
   app.use('/api/runtime-nodes', authenticateToken, runtimeNodesRoutes);
   app.use('/api/projects', authenticateToken, createHostedRelayProjectsRouter());
   app.use('/api/providers', authenticateToken, createRouteAllowlist(HOSTED_RELAY_PROVIDER_ROUTES), providerRoutes);
+  // Onboarding configures the host's Git identity and provider logins, and a relay has neither
+  // (Git identity lives on RuntimeNodes: /api/user/git-config answers 501). Asking a user to
+  // finish it would trap them on a step they cannot complete, so it never gates the relay.
+  app.get('/api/user/onboarding-status', authenticateToken, (_req, res) => {
+    res.json({ success: true, hasCompletedOnboarding: true });
+  });
   app.use('/api/user', authenticateToken, createRouteAllowlist(HOSTED_RELAY_USER_ROUTES), userRoutes);
   // Authentication first: an anonymous caller learns nothing about which surfaces exist.
   app.use('/api', authenticateToken, hostedRelayUnsupported);

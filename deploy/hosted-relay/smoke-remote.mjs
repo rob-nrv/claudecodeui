@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Black-box checks of a deployed Hosted Relay, run FROM A MACHINE OUTSIDE the VPS.
-//   node smoke-remote.mjs https://relay.example.com [--insecure-local]
+//   node smoke-remote.mjs https://relay.example.com [--probe-rate-limit] [--insecure-local]
+// --probe-rate-limit sends wrong pairing codes until throttled, which blocks THIS address
+// from pairing for ~15 minutes. Run it LAST, after smoke-browser.mjs.
 // It proves the automatable part of the public gate (TLS, edge exposure, headers,
 // unauthenticated surface, rate limiting). It does NOT replace the human browser
 // pairing / node online-offline check in README.md section 6.
@@ -14,6 +16,7 @@ if (!originArg) {
   process.exit(2);
 }
 const origin = new URL(originArg);
+const probeRateLimit = flags.includes('--probe-rate-limit');
 const insecure = flags.includes('--insecure-local'); // loopback simulation only, never for a real check
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -59,8 +62,10 @@ if (!insecure) {
 }
 
 // 2. Backend is not exposed directly
+// A closed port proves nothing if the host itself is unreachable, so the public port must answer first.
+const publicPortOpen = !(await closedPort(Number(origin.port || 443)));
 for (const port of [3001, 3443]) {
-  check(`port ${port} is not reachable from the Internet`, await closedPort(port));
+  check(`port ${port} is not reachable from the Internet`, publicPortOpen && (await closedPort(port)), publicPortOpen ? '' : 'public port did not answer, so this proves nothing');
 }
 
 // 3. Public surface
@@ -97,17 +102,34 @@ check('oversized body is refused', [413, 400].includes(big.status), String(big.s
 const source = await request('/source');
 check('AGPL source offer /source redirects (https) — set CLOUDCLI_SOURCE_URL', source.status === 302 && String(source.headers.location).startsWith('https://'), String(source.status));
 
-// 4. Rate limiting on the guessable secret (uses 12 wrong codes from this address)
-let limited = false;
-for (let i = 0; i < 12 && !limited; i += 1) {
-  const response = await request('/api/remote-access/pair', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', origin: origin.origin },
-    body: JSON.stringify({ username: 'smoke', password: 'smoke-not-a-password', pairingCode: '0000-0000-0000' }),
+// 4. Plain HTTP only redirects to HTTPS
+if (!insecure) {
+  const redirect = await new Promise((resolve) => {
+    import('node:http').then(({ default: http }) => {
+      http.get({ host: origin.hostname, port: 80, path: '/', timeout: 8000 }, (res) => { res.resume(); resolve({ status: res.statusCode, location: res.headers.location }); })
+        .on('error', (error) => resolve({ error: error.message }));
+    });
   });
-  limited = response.status === 429;
+  check('port 80 only redirects to https', redirect.status === 301 && String(redirect.location).startsWith('https://'), redirect.error ?? String(redirect.status));
 }
-check('repeated wrong pairing codes end in 429', limited);
+
+// 5. Rate limiting on the guessable secret (opt-in: it blocks this address for ~15 min)
+if (probeRateLimit) {
+  let limited = null;
+  for (let i = 0; i < 12 && !limited; i += 1) {
+    const response = await request('/api/remote-access/pair', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: origin.origin },
+      body: JSON.stringify({ username: 'smoke', password: 'smoke-not-a-password', pairingCode: '0000-0000-0000' }),
+    });
+    if (response.status === 429) limited = response;
+  }
+  // The relay answers with a JSON error body; the nginx edge answers with its own HTML page.
+  const layer = limited ? (limited.body.trim().startsWith('{') ? 'relay limiter (keyed on the real client address)' : 'nginx edge limiter') : 'none';
+  check('repeated wrong pairing codes end in 429', Boolean(limited), layer);
+} else {
+  console.log('SKIP  rate-limit probe (run with --probe-rate-limit, last)');
+}
 
 const failed = results.filter((ok) => !ok).length;
 console.log(`\n${results.length - failed}/${results.length} checks passed`);

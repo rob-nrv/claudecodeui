@@ -4,6 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Environment=HOME=/var/lib/cloudcli-relay
 User=cloudcli-relay
 Group=cloudcli-relay
 WorkingDirectory=/opt/cloudcli-relay

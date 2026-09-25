@@ -8,6 +8,7 @@ import http from 'http';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 
+import { createCorrespondingSourceHandler } from '@/shared/corresponding-source.js';
 import { AppError, findApplicationRoot, getModuleDirectory, IS_PLATFORM, terminalTextStyles } from '@/shared/utils.js';
 import {
     closeSessionsWatcher,
@@ -196,6 +197,9 @@ app.use(express.json({
     }
 }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// AGPL-3.0 section 13 offer (public): 302 to CLOUDCLI_SOURCE_URL, explicit 404 when unset
+app.get('/source', createCorrespondingSourceHandler(process.env));
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {

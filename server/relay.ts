@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { createHostedRelay } from '@/modules/hosted-relay/index.js';
-import { readCorrespondingSourceUrl } from '@/modules/hosted-relay/hosted-relay-csp.js';
+import { readCorrespondingSourceUrl } from '@/shared/corresponding-source.js';
 import { findApplicationRoot, getModuleDirectory, IS_PLATFORM } from '@/shared/utils.js';
 
 import { resolveBindHost } from '../shared/networkHosts.js';
