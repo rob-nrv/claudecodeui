@@ -32,6 +32,10 @@ COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/public ./public
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/deploy/hosted-relay/backup.mjs /app/deploy/hosted-relay/restore.mjs /app/deploy/nas-hub/verify-container.mjs ./deploy/
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT \
+      org.opencontainers.image.title="CloudCLI Hosted Relay" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
 USER 10001:10001
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

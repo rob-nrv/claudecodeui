@@ -11,7 +11,7 @@ Plan and reasoning: [docs/nas-hub-hosting-plan.md](../../docs/nas-hub-hosting-pl
 | `serve-tailnet.json`, `serve-funnel.json` | Tailscale serve configurations. Funnel is **off** in the first and **on** in the second; the second is not used until the Funnel gates pass |
 | `relay.env.example` | Variables, no secrets |
 | `verify-container.mjs` | In-container verification (isolation, health, CSP, auth, WebSocket, no local execution, client-address keying, logout) |
-| `private-test.sh` | Builds and tests on nas-hub with no network, then removes exactly what it created and proves Jarvis is unchanged |
+| `private-test.sh` | Proves the archive commit, builds and tests on nas-hub with no network, removes exactly what it created, compares the whole state before/after and fails on any doubt. `private-test.selftest.sh` replays its verdict logic without Docker; `cleanup-buildkit-leftover.sh` is the one-off targeted cleanup |
 | `audit-readonly.sh`, `firewall-readonly.sh`, `backup-evidence-readonly.sh` | Read-only inventories (the firewall one needs interactive sudo) |
 
 ## Why this network design
@@ -27,16 +27,38 @@ Not yet tested: the `tailscale` sidecar (needs a Tailscale auth key and HTTPS en
 
 ## Private Linux test (no exposure)
 
-From the repository, at the commit to test (working tree may be dirty; only the commit is shipped):
+Run these from **Git Bash** (or WSL). Windows PowerShell 5.1 turns anything a remote command writes to stderr into a red `NativeCommandError` and `tee` writes UTF-16, which makes a report look like a failed login and unreadable; the remote script is fine, the wrapper is not. If PowerShell must be used, add `2>&1` and `| Out-File -Encoding utf8`.
+
+The commit id is passed on purpose: the script reads it back out of the archive (`git get-tar-commit-id`) and refuses to build anything else.
 
 ```bash
-git archive --format=tar HEAD | ssh robin@192.168.1.145 'cat > /tmp/cloudcli-ctx.tar'
-ssh robin@192.168.1.145 'bash -s -- /tmp/cloudcli-ctx.tar' < deploy/nas-hub/private-test.sh | tee nas-hub-private-test.txt
+EXPECT=$(git rev-parse HEAD)
+git archive --format=tar "$EXPECT" | ssh robin@192.168.1.145 'cat > /tmp/cloudcli-ctx.tar'
+ssh robin@192.168.1.145 "bash -s -- /tmp/cloudcli-ctx.tar $EXPECT" < deploy/nas-hub/private-test.sh 2>&1 | tee nas-hub-private-test.txt
 ```
 
-Each `ssh` asks for the login password once (interactive; never put it in a file). The script needs only the docker group. Expected end: `RESULT: ALL CHECKS PASSED`, no leftovers, existing containers `IDENTICAL`.
+Each `ssh` asks for the login password (up to three tries per connection; nothing is stored). The script needs only the docker group. It ends with **`RESULT: ALL CHECKS PASSED`** only if there is no FAIL at all: a failed collection command, an unreadable container state, any difference from the starting state (containers, images by full id, networks, volumes, host listening sockets, the state of every existing container) or any resource left behind is a FAIL, and the run then prints `RESULT: FAILED (n)` with the list. The only images it may remove are the one it built and the buildkit image pulled by the builder it created itself, by tag, without force, and only if no container uses them.
 
-Optional read-only checks (need your interactive password, the second one needs sudo):
+Read-only state of the existing containers (no build, nothing created), e.g. to confirm none was restarted:
+
+```bash
+ssh robin@192.168.1.145 'bash -s -- --snapshot-only' < deploy/nas-hub/private-test.sh
+```
+
+The verdict logic is tested without Docker (about 30 cases, including containers with and without a healthcheck, failed collection, changed container, leftover image/network/volume/socket, wrong archive commit):
+
+```bash
+bash deploy/nas-hub/private-test.selftest.sh
+```
+
+One-off cleanup of the buildkit image the first run left on nas-hub (dry run by default, prints the evidence, refuses unless its identity and non-use are established):
+
+```bash
+ssh robin@192.168.1.145 'bash -s' < deploy/nas-hub/cleanup-buildkit-leftover.sh
+ssh robin@192.168.1.145 'bash -s -- --apply' < deploy/nas-hub/cleanup-buildkit-leftover.sh
+```
+
+Optional read-only checks (the second one needs interactive sudo):
 
 ```bash
 ssh robin@192.168.1.145 'bash -s' < deploy/nas-hub/backup-evidence-readonly.sh > nas-hub-backup-evidence.txt

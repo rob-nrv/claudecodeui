@@ -31,4 +31,4 @@ for (const suffix of ['', '-wal', '-shm']) {
 }
 fs.copyFileSync(backup, destination);
 fs.chmodSync(destination, 0o600);
-console.log(`restored ${backup} -> ${destination} (previous database kept as .before-restore-${stamp}). Now: chown the file to cloudcli-relay and start the service.`);
+console.log(`restored ${backup} -> ${destination} (previous database kept as .before-restore-${stamp}). Now make sure the service user owns the file, then start the service.`);
