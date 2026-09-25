@@ -65,6 +65,10 @@ ssh robin@192.168.1.145 'bash -s' < deploy/nas-hub/backup-evidence-readonly.sh >
 ssh -t robin@192.168.1.145 'sudo bash -s' < deploy/nas-hub/firewall-readonly.sh > nas-hub-firewall.txt
 ```
 
+## Installation on nas-hub (Tailscale Serve, tailnet only)
+
+Executed stage by stage with `install.sh` (header lists the stages) from Windows PowerShell through `nas.ps1`; every real change is appended to `~/cloudcli-relay/journal.log` as `CHANGE`, audits as `READ`. Files live under `/home/robin/cloudcli-relay` (no sudo, nothing under `/opt/nas`). Login to the tailnet uses a one-time link opened in your own browser: no key is pasted anywhere. Funnel is never enabled (`serve-tailnet.json` sets `AllowFunnel` false and `install.sh preflight` checks it). The full record for the Jarvis project is `docs/nas-hub-relay-installation.md`, written from the real outputs.
+
 ## Real start, stop, restore (after the private test and the Jarvis preconditions)
 
 State lives in two named volumes of project `cloudcli-relay` (`relay-data`, `ts-state`); secrets in `/srv/cloudcli-relay/relay.env` (mode 0600, outside the repository).
