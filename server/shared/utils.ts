@@ -1321,14 +1321,26 @@ export function createFailureRateLimiter(options: {
   };
 }
 
+const trustedClientAddresses = new WeakMap<object, string>();
+
 /**
- * Address of the TCP peer, for rate limiting. Forwarding headers are ignored on
- * purpose because any client can forge them; behind a local TLS terminator
- * every request shares one key and the global cap still applies. Used by
+ * Records the client address a trusted local TLS terminator reported for this
+ * request. Only the Remote Gateway in external-tls mode calls this: that
+ * listener binds loopback, so its only peer is the operator's own proxy.
+ */
+export function setTrustedClientAddress(request: object, address: string): void {
+  trustedClientAddresses.set(request, address);
+}
+
+/**
+ * Address used to key rate limits. Forwarding headers are never read here
+ * because any client can forge them; the only override is the address the
+ * gateway recorded from its own loopback-bound terminator (see
+ * `setTrustedClientAddress`). Without a terminator it is the TCP peer. Used by
  * remote-access and runtime-nodes.
  */
 export function readRequestClientAddress(request: { socket?: { remoteAddress?: string } | null }): string {
-  return request.socket?.remoteAddress || 'unknown';
+  return trustedClientAddresses.get(request) ?? (request.socket?.remoteAddress || 'unknown');
 }
 
 // ---------------------------

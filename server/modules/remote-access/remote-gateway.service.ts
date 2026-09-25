@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import https from 'node:https';
+import { isIP } from 'node:net';
 import type { Duplex } from 'node:stream';
 
 import type { RemoteGatewayConfig, RemoteGatewayConfigResult } from '@/modules/remote-access/remote-gateway-config.js';
 import { markRemoteTransport } from '@/modules/remote-access/remote-transport.js';
+import { setTrustedClientAddress } from '@/shared/utils.js';
 
 /** What the gateway is doing right now; exposed (without secrets or key paths) in Settings. */
 export type RemoteGatewayStatus = {
@@ -42,6 +44,19 @@ function describeListenError(error: unknown): string {
 }
 
 /**
+ * Client address behind a same-machine TLS terminator (external-tls). The
+ * terminator appends the peer it saw as the LAST X-Forwarded-For entry, so
+ * that entry is the only one a client cannot choose; earlier ones are ignored.
+ * An absent or malformed header falls back to the TCP peer (the terminator
+ * itself), never to a client-supplied value.
+ */
+export function resolveTerminatorClientAddress(forwardedFor: string | string[] | undefined, peer: string | undefined): string {
+  const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor;
+  const last = header?.split(',').pop()?.trim();
+  return last && isIP(last) ? last : peer || 'unknown';
+}
+
+/**
  * Starts the second, remote-facing listener. Every request and upgrade it
  * receives is marked as remote before the application sees it. Failure never
  * affects the local listener: it is reported through the returned status.
@@ -56,8 +71,15 @@ export async function startRemoteGateway(
   }
 
   const baseStatus = { mode: config.mode, publicOrigin: config.publicOrigin, bindHost: config.bindHost, port: config.port };
-  const onRequest = (request: IncomingMessage, response: ServerResponse) => {
+  // Only external-tls listens on loopback for a terminator we operate; a tls-mode peer is the client itself.
+  const markRemote = (request: IncomingMessage) => {
     markRemoteTransport(request);
+    if (config.mode === 'external-tls') {
+      setTrustedClientAddress(request, resolveTerminatorClientAddress(request.headers['x-forwarded-for'], request.socket.remoteAddress));
+    }
+  };
+  const onRequest = (request: IncomingMessage, response: ServerResponse) => {
+    markRemote(request);
     handlers.handleRequest(request, response);
   };
 
@@ -79,7 +101,7 @@ export async function startRemoteGateway(
   server.headersTimeout = 30_000;
   server.requestTimeout = 60_000;
   server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-    markRemoteTransport(request);
+    markRemote(request);
     handlers.handleUpgrade(request, socket, head);
   });
 

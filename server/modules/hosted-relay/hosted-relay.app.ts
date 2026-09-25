@@ -20,6 +20,7 @@ import {
   HOSTED_RELAY_USER_ROUTES,
   hostedRelayUnsupported,
 } from '@/modules/hosted-relay/hosted-relay-routes.js';
+import { buildRelayContentSecurityPolicy, readCorrespondingSourceUrl } from '@/modules/hosted-relay/hosted-relay-csp.js';
 import { AppError, setServerRole } from '@/shared/utils.js';
 
 import { buildLoopbackOrigins, isLoopbackHost } from '../../../shared/networkHosts.js';
@@ -75,8 +76,10 @@ export function createHostedRelay(options: HostedRelayOptions) {
   const allowedOrigins = buildLoopbackOrigins([options.port]);
   let ready = false;
 
+  const gatewayConfig = readRemoteGatewayConfig(options.env, { isPlatform: options.isPlatform, serverPort: options.port });
+  const publicOrigin = gatewayConfig.ok && gatewayConfig.config.mode !== 'off' ? gatewayConfig.config.publicOrigin : null;
   const remoteAccess = createRemoteAccess({
-    configResult: readRemoteGatewayConfig(options.env, { isPlatform: options.isPlatform, serverPort: options.port }),
+    configResult: gatewayConfig,
     localListener: { host: options.host, port: options.port, loopbackOnly: isLoopbackHost(options.host) },
     authenticateToken,
   });
@@ -124,6 +127,16 @@ export function createHostedRelay(options: HostedRelayOptions) {
     });
   });
 
+  // AGPL-3.0 §13 offer: public, credential-free, and never a redirect to anything but the operator's https URL.
+  const correspondingSourceUrl = readCorrespondingSourceUrl(options.env);
+  app.get('/source', (_req, res) => {
+    if (!correspondingSourceUrl) {
+      res.status(404).type('text/plain').send('Corresponding Source location is not configured on this relay.');
+      return;
+    }
+    res.redirect(302, correspondingSourceUrl);
+  });
+
   app.use('/api/runtime-node-link', runtimeNodeLinkRoutes);
   app.use('/api', validateApiKey);
   app.use('/api/auth', authRoutes);
@@ -163,6 +176,7 @@ export function createHostedRelay(options: HostedRelayOptions) {
       return;
     }
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Content-Security-Policy', buildRelayContentSecurityPolicy(publicOrigin, fs.readFileSync(indexPath, 'utf8')));
     res.sendFile(indexPath);
   });
 

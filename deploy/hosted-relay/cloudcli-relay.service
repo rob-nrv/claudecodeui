@@ -1,0 +1,25 @@
+[Unit]
+Description=CloudCLI Hosted Relay (coordination only, never runs sessions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cloudcli-relay
+Group=cloudcli-relay
+WorkingDirectory=/opt/cloudcli-relay
+EnvironmentFile=/etc/cloudcli-relay/relay.env
+ExecStart=/usr/bin/node dist-server/server/relay.js
+Restart=on-failure
+RestartSec=3
+StateDirectory=cloudcli-relay
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/cloudcli-relay
+# The relay listens on loopback only; it never needs an inbound or outbound route beyond that.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

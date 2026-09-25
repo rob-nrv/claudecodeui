@@ -1,0 +1,9 @@
+[Unit]
+Description=CloudCLI Hosted Relay database backup
+
+[Service]
+Type=oneshot
+User=cloudcli-relay
+EnvironmentFile=/etc/cloudcli-relay/relay.env
+Environment=BACKUP_DIR=/var/backups/cloudcli-relay
+ExecStart=/opt/cloudcli-relay/deploy/hosted-relay/backup.sh

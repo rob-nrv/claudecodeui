@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { createHostedRelay } from '@/modules/hosted-relay/index.js';
+import { readCorrespondingSourceUrl } from '@/modules/hosted-relay/hosted-relay-csp.js';
 import { findApplicationRoot, getModuleDirectory, IS_PLATFORM } from '@/shared/utils.js';
 
 import { resolveBindHost } from '../shared/networkHosts.js';
@@ -31,6 +32,9 @@ const relay = createHostedRelay({
 try {
   const { port, gateway } = await relay.start();
   console.log(`[Relay] CloudCLI Hosted Relay ready on 127.0.0.1:${port} (loopback only). It never runs sessions itself.`);
+  if (!readCorrespondingSourceUrl(process.env)) {
+    console.warn('[Relay] CLOUDCLI_SOURCE_URL is unset or not https: /source offers no Corresponding Source (AGPL-3.0 §13). Set it before any public exposure.');
+  }
   if (gateway.state === 'listening') {
     console.log(`[Relay] Remote gateway (${gateway.mode}): ${gateway.publicOrigin} on ${gateway.bindHost}:${gateway.port}`);
   } else {

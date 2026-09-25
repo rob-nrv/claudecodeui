@@ -1,6 +1,6 @@
 # Hosted Relay (FT-M11)
 
-**Status:** implemented and verified automatically on loopback. **Not deployed.** Public deployment waits for the decisions in [§7](#7-public-deploy-gate).
+**Status:** implemented and verified automatically on loopback; the public-deploy technical gaps (client address behind the terminator, CSP, AGPL source offer) are closed and the VPS runbook is ready in [`deploy/hosted-relay/`](../deploy/hosted-relay/README.md). **Not deployed, not validated on a public origin.** Public deployment waits for the owner inputs in [§7](#7-public-deploy-gate).
 
 Related: [remote-access-and-runtime-nodes.md](remote-access-and-runtime-nodes.md), [cloud-apk-v1-sequencing.md](cloud-apk-v1-sequencing.md), [portable-workspace-contract.md](portable-workspace-contract.md).
 
@@ -71,13 +71,13 @@ npm run build && npm run relay
 | WebSocket | Cookie + exact origin; URL tokens refused | — |
 | Credentials in URLs | Refused (`token`, `access_token`, `auth`, `apiKey`, `api_key`) | — |
 | Node auth | Ed25519 enrollment, signed nonce-checked link header, replay/identity-conflict protection, revocation terminal; browsers can never enroll or link | — |
-| Headers | HSTS, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, `frame-ancestors 'none'`, `no-store` on API | Full CSP (the client loads Google Fonts) |
+| Headers | HSTS, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, `no-store` on API; full CSP on the client page (`default-src 'self'`, scripts = bundle + the hashed inline service-worker registration, Google Fonts only third party, `wss:` pinned to the public origin, `frame-ancestors 'none'`); checked in headless Chrome over TLS (client renders, service worker registers, no violation) | — |
 | Body limits | JSON 1 MB (413); gateway header 30 s / request 60 s timeouts | — |
-| Rate limiting | Pairing and enrollment failures, per address and global | Edge rate limiting for all traffic. Behind `external-tls` every request comes from 127.0.0.1, so the per-address limits become one shared bucket until a trusted-proxy policy exists (not implemented). |
+| Rate limiting | Pairing and enrollment failures, per address and global | Edge rate limiting for all traffic (nginx `limit_req` in the runbook). Trusted-proxy policy: only in `external-tls` (gateway bound to loopback, so the only peer is the operator's terminator) the relay keys its failure limits on the LAST `X-Forwarded-For` entry, which the terminator sets; earlier entries and non-IP values are ignored; in `tls` mode headers are never read. The terminator must replace, not forward, the header. |
 | Health | Remote callers get `{status:"ok"}` only | — |
 | Surface disclosure | Unsupported paths answer 401 before authentication | — |
-| Logs | No tokens, cookies or node keys logged; URL tokens redacted | Log retention and access policy |
-| Data at rest | SQLite on the relay host; node paths come only from each node's verification | Disk encryption, backups, retention |
+| Logs | No tokens, cookies or node keys logged; URL tokens redacted | Log retention and access policy (journald defaults on the VPS) |
+| Data at rest | SQLite on the relay host; node paths come only from each node's verification | Daily WAL-safe backup script + timer provided; off-host copy and disk encryption are owner decisions |
 | Multi-user | Single-user model inherited (every signed-in user sees every project and node) | Membership model if more than one person uses a relay |
 
 ## 5. No-fallback proof
@@ -99,7 +99,7 @@ npm run build && npm run relay
   - 7(c): modified versions must be marked as such and not presented as the original;
   - 7(d): no use of the names "Siteboon" / "CloudCLI" for publicity without written permission;
   - 7(e): no trademark rights in "CloudCLI", "CloudCLI UI" or "Siteboon".
-- **§13 (Remote Network Interaction):** a modified version offered to users over a network must prominently offer those users the Corresponding Source of that version. This fork is modified; the login page's "open source" link points to the upstream repository, not to this version's source.
+- **§13 (Remote Network Interaction):** a modified version offered to users over a network must prominently offer those users the Corresponding Source of that version. This fork is modified; the login page's "open source" link points to the upstream repository, not to this version's source. The relay therefore serves `GET /source` (public, 302 to `CLOUDCLI_SOURCE_URL`, https only, 404 if unset) and warns at startup when it is unset. A visible in-page link is a UI change left out of this lot.
 
 ## 7. Public deploy gate
 
