@@ -1,0 +1,15 @@
+.git
+node_modules
+dist
+dist-server
+dist-server.next
+android
+electron
+prototype
+docs/ft-m01-evidence
+docs/mobile-north-star
+nas-hub-audit.txt
+hc04-notification-test.txt
+*.log
+.env
+.env.*

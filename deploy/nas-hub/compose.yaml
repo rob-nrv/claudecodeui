@@ -1,0 +1,67 @@
+# CloudCLI Hosted Relay on nas-hub: its own Compose project, network namespace and volume.
+# Nothing here publishes a host port and nothing mounts docker.sock, a home directory,
+# a repository or a provider credential.
+#
+# RELAY_NETWORK_MODE decides how the relay is reachable:
+#   none               private test: the container has only its own loopback (docker exec to reach it)
+#   service:tailscale  real use: shares the loopback of the tailscale sidecar (start with --profile tailscale)
+name: cloudcli-relay
+
+services:
+  relay:
+    image: ${RELAY_IMAGE:-cloudcli-relay:nas}
+    init: true
+    restart: unless-stopped
+    network_mode: ${RELAY_NETWORK_MODE:?set RELAY_NETWORK_MODE to none or service:tailscale}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    pids_limit: 200
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    environment:
+      # Public origin as browsers see it, e.g. https://<node>.<tailnet>.ts.net (never invented here).
+      CLOUDCLI_REMOTE_ORIGIN: ${CLOUDCLI_REMOTE_ORIGIN:?set the https public origin}
+      # AGPL-3.0 section 13: https URL of the source of the deployed commit (empty = /source answers 404).
+      CLOUDCLI_SOURCE_URL: ${CLOUDCLI_SOURCE_URL:-}
+    volumes:
+      - relay-data:/data
+
+  # Only for real use (Serve, later Funnel). Not started by the private test.
+  tailscale:
+    profiles: [tailscale]
+    image: tailscale/tailscale:${TAILSCALE_IMAGE_TAG:-stable}
+    restart: unless-stopped
+    hostname: ${TS_HOSTNAME:-cloudcli-relay}
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 100
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    environment:
+      TS_USERSPACE: "true"                  # no /dev/net/tun, no NET_ADMIN
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"                  # the key is used for the first login only
+      TS_AUTHKEY: ${TS_AUTHKEY:-}           # supplied from a 0600 env file outside the repo, first start only
+      TS_SERVE_CONFIG: /config/${TS_SERVE_FILE:-serve-tailnet.json}
+      TS_EXTRA_ARGS: --advertise-tags=${TS_TAG:-tag:cloudcli-relay}
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./serve-tailnet.json:/config/serve-tailnet.json:ro
+      - ./serve-funnel.json:/config/serve-funnel.json:ro
+
+volumes:
+  relay-data:
+  ts-state:
