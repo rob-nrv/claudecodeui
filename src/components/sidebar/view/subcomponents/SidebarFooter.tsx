@@ -1,22 +1,15 @@
-import { Settings, ArrowUpCircle, Bug, AlertTriangle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, ArrowUpCircle, Bug, Check, ChevronDown, Settings, SlidersHorizontal } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { IS_PLATFORM } from '../../../../shared/utils';
-import AppUserBadge from '../../../identity/view/AppUserBadge';
+import { cn } from '../../../../lib/utils';
+import { useAppUserIdentity } from '../../../../hooks/useAppUserIdentity';
 import type { ReleaseInfo } from '../../../../shared/types';
+import { QUICK_SETTINGS_TOGGLE_EVENT } from '../../../quick-settings-panel/view/QuickSettingsPanelView';
+import ClaudeLiveUsageSummary from '../../../provider-usage/view/ClaudeLiveUsageSummary';
+import { useClaudeProfiles, type ClaudeProfile } from '../../../settings/hooks/useClaudeProfiles';
 
 const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
-const GITHUB_REPO_URL = 'https://github.com/siteboon/claudecodeui';
-
-const DISCORD_INVITE_URL = 'https://discord.gg/buxwujPNRE';
-
-function DiscordIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" />
-    </svg>
-  );
-}
 
 type SidebarFooterProps = {
   updateAvailable: boolean;
@@ -29,177 +22,175 @@ type SidebarFooterProps = {
   t: TFunction;
 };
 
+const CONNECTION_LABEL: Record<ClaudeProfile['connectionState'], string> = {
+  connected: 'Signed in',
+  expired: 'Sign-in expired',
+  not_authenticated: 'Signed out',
+  unknown: 'Not verified',
+};
+
+const formatTier = (tier: string | null | undefined): string | null => {
+  if (!tier) return null;
+  const clean = tier.replace(/^claude[_-]?/i, '').replace(/[_-]/g, ' ').trim();
+  return clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : null;
+};
+
+/*
+ * Claude desktop footer: a 40px row under a hairline — monogram, account name
+ * "· plan", chevron, and a settings button on the right. The row opens the
+ * account menu, which is where CloudCLI's two Claude accounts are switched.
+ *
+ * Switching reuses the existing mechanism: it marks a profile as Default
+ * (PATCH /api/claude-profiles/:id {isDefault}). New sessions start under the
+ * Default profile; running and past sessions keep their own bound profile,
+ * and "Continue in a new run…" on a session still hands it to the other one.
+ */
 export default function SidebarFooter({
   updateAvailable,
   restartRequired,
   releaseInfo,
   latestVersion,
-  currentVersion,
   onShowVersionModal,
   onShowSettings,
   t,
 }: SidebarFooterProps) {
+  const identity = useAppUserIdentity();
+  const { profiles, setDefaultProfile } = useClaudeProfiles();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const activeProfile = profiles.find((profile) => profile.isDefault) ?? profiles[0] ?? null;
+  const accountName = activeProfile?.displayName ?? identity.displayName;
+  const tier = formatTier(activeProfile?.verifiedIdentity?.tier);
+  const monogram = (accountName.trim().charAt(0) || identity.monogram || '?').toUpperCase();
+
+  useEffect(() => {
+    if (!isMenuOpen) return undefined;
+    const close = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setIsMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setIsMenuOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isMenuOpen]);
+
+  const switchTo = async (profile: ClaudeProfile) => {
+    if (profile.isDefault || switchingId) return;
+    setSwitchingId(profile.id);
+    try {
+      await setDefaultProfile(profile.id);
+    } finally {
+      setSwitchingId(null);
+    }
+  };
+
   return (
-    <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
-      {/* Restart-required banner: the running server version differs from the
-          installed/frontend version (updated but not restarted). */}
+    <div ref={rootRef} className="relative flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       {restartRequired && (
-        <>
-          <div className="nav-divider" />
-          <div className="px-2 py-1.5 md:px-2 md:py-1.5">
-            <div className="flex items-center gap-2.5 rounded-lg border border-amber-300/60 bg-amber-50/80 px-2.5 py-2 dark:border-amber-700/40 dark:bg-amber-900/15">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 dark:text-amber-400" />
-              <span className="min-w-0 flex-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-                {t('version.restartRequired')}
-              </span>
-            </div>
-          </div>
-        </>
+        <div className="mx-[3px] mb-1 flex items-center gap-2 rounded-md px-[10px] py-1.5 text-[12px] text-amber-500">
+          <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="min-w-0 flex-1">{t('version.restartRequired')}</span>
+        </div>
       )}
-
-      {/* Update banner */}
       {updateAvailable && (
-        <>
-          <div className="nav-divider" />
-          {/* Desktop update */}
-          <div className="hidden px-2 py-1.5 md:block">
-            <button
-              className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-blue-50/80 dark:hover:bg-blue-900/15"
-              onClick={onShowVersionModal}
-            >
-              <div className="relative flex-shrink-0">
-                <ArrowUpCircle className="h-4 w-4 text-blue-500 dark:text-blue-400" />
-                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-normal text-blue-600 dark:text-blue-300">
-                  {releaseInfo?.title || `v${latestVersion}`}
-                </span>
-                <span className="text-[10px] text-blue-500/70 dark:text-blue-400/60">
-                  {t('version.updateAvailable')}
-                </span>
-              </div>
-            </button>
-          </div>
-
-          {/* Mobile update */}
-          <div className="px-3 py-2 md:hidden">
-            <button
-              className="flex h-11 w-full items-center gap-3 rounded-xl border border-blue-200/60 bg-blue-50/80 px-3.5 transition-all active:scale-[0.98] dark:border-blue-700/40 dark:bg-blue-900/15"
-              onClick={onShowVersionModal}
-            >
-              <div className="relative flex-shrink-0">
-                <ArrowUpCircle className="h-4 w-4 text-blue-500 dark:text-blue-400" />
-                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-              </div>
-              <div className="min-w-0 flex-1 text-left">
-                <span className="block truncate text-sm font-normal text-blue-600 dark:text-blue-300">
-                  {releaseInfo?.title || `v${latestVersion}`}
-                </span>
-                <span className="text-xs text-blue-500/70 dark:text-blue-400/60">
-                  {t('version.updateAvailable')}
-                </span>
-              </div>
-            </button>
-          </div>
-        </>
+        <button
+          type="button"
+          onClick={onShowVersionModal}
+          className="mx-[3px] mb-1 flex w-[calc(100%-6px)] items-center gap-2 rounded-md px-[10px] py-1.5 text-left text-[13px] text-c-text-2 hover:bg-c-hover"
+        >
+          <ArrowUpCircle className="h-3.5 w-3.5 flex-shrink-0 text-c-toggle" />
+          <span className="min-w-0 flex-1 truncate">{releaseInfo?.title || `v${latestVersion}`} · {t('version.updateAvailable')}</span>
+        </button>
       )}
 
-      {/* Community + Settings */}
-      <div className="nav-divider" />
-
-      {/* Desktop Report Issue */}
-      <div className="hidden px-2 pt-1.5 md:block">
-        <a
-          href={GITHUB_ISSUES_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+      {isMenuOpen && (
+        <div
+          role="menu"
+          className="absolute bottom-[44px] left-[6px] right-[6px] z-50 rounded-[10px] border border-c-card-border bg-c-surface p-1 text-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
         >
-          <Bug className="h-3.5 w-3.5" />
-          <span className="text-sm">{t('actions.reportIssue')}</span>
-        </a>
-      </div>
-
-      {/* Desktop Discord */}
-      <div className="hidden px-2 md:block">
-        <a
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <DiscordIcon className="h-3.5 w-3.5" />
-          <span className="text-sm">{t('actions.joinCommunity')}</span>
-        </a>
-      </div>
-
-      {/* Desktop settings — doubles as the "who am I signed in as" surface, so
-          the app user's identity is visible without opening Settings. */}
-      <div className="hidden px-2 py-1.5 md:block">
-        <button
-          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-          onClick={onShowSettings}
-          title={t('actions.settings')}
-        >
-          <AppUserBadge caption={t('actions.settings')} className="min-w-0 flex-1" />
-          <Settings className="h-3.5 w-3.5 flex-shrink-0" />
-        </button>
-      </div>
-
-      {/* Desktop version brand line (OSS mode only) */}
-      {!IS_PLATFORM && (
-        <div className="hidden px-3 py-2 text-center md:block">
-          <a
-            href={GITHUB_REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[10px] text-muted-foreground/40 transition-colors hover:text-muted-foreground"
-          >
-            CloudCLI v{currentVersion} – {t('branding.openSource')}
+          <div className="px-2.5 pb-1 pt-1.5 text-[12px] text-c-text-3">{identity.displayName}</div>
+          {profiles.length > 0 && (
+            <>
+              <div className="px-2.5 pb-1 pt-1 text-[12px] text-c-text-3">{t('accounts.claude', 'Claude accounts')}</div>
+              {profiles.map((profile) => (
+                <button
+                  key={profile.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={profile.isDefault}
+                  onClick={() => void switchTo(profile)}
+                  disabled={Boolean(switchingId)}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-c-text-2 hover:bg-c-active hover:text-c-text disabled:opacity-60"
+                >
+                  <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-c-active text-[11px] font-semibold text-c-text">
+                    {(profile.displayName.charAt(0) || '?').toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-c-text">{profile.displayName}</span>
+                    <span className="block truncate text-[12px] text-c-text-3">
+                      {[formatTier(profile.verifiedIdentity?.tier), t(`accounts.state.${profile.connectionState}`, CONNECTION_LABEL[profile.connectionState])].filter(Boolean).join(' · ')}
+                    </span>
+                  </span>
+                  {profile.isDefault && <Check className="h-4 w-4 flex-shrink-0 text-c-text" />}
+                </button>
+              ))}
+              {activeProfile && (
+                <div className="px-1.5 pb-1">
+                  <ClaudeLiveUsageSummary claudeProfileId={activeProfile.id} />
+                </div>
+              )}
+              <p className="px-2.5 pb-1.5 pt-1 text-[11px] leading-4 text-c-text-3">
+                {t('accounts.switchHint', 'New sessions start on the selected account. To move a running conversation, use “Continue in a new run…” on it.')}
+              </p>
+              <div className="my-1 h-px bg-c-card-border" />
+            </>
+          )}
+          <button type="button" role="menuitem" onClick={() => { setIsMenuOpen(false); onShowSettings(); }} className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-c-text-2 hover:bg-c-active hover:text-c-text">
+            <Settings className="h-4 w-4" strokeWidth={1.6} />
+            {t('actions.settings')}
+          </button>
+          <button type="button" role="menuitem" onClick={() => { setIsMenuOpen(false); window.dispatchEvent(new Event(QUICK_SETTINGS_TOGGLE_EVENT)); }} className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-c-text-2 hover:bg-c-active hover:text-c-text">
+            <SlidersHorizontal className="h-4 w-4" strokeWidth={1.6} />
+            {t('actions.quickSettings', 'Quick settings')}
+          </button>
+          <a href={GITHUB_ISSUES_URL} target="_blank" rel="noopener noreferrer" role="menuitem" className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-c-text-2 hover:bg-c-active hover:text-c-text">
+            <Bug className="h-4 w-4" strokeWidth={1.6} />
+            {t('actions.reportIssue')}
           </a>
         </div>
       )}
 
-      {/* Mobile Report Issue */}
-      <div className="px-3 pt-3 md:hidden">
-        <a
-          href={GITHUB_ISSUES_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex h-10 w-full items-center gap-3 rounded-xl bg-muted/40 px-3.5 transition-all hover:bg-muted/60 active:scale-[0.98]"
-        >
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-background/80">
-            <Bug className="h-4 w-4 text-muted-foreground" />
-          </div>
-          <span className="text-sm font-normal text-foreground">{t('actions.reportIssue')}</span>
-        </a>
-      </div>
-
-      {/* Mobile Discord */}
-      <div className="px-3 pt-2 md:hidden">
-        <a
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex h-10 w-full items-center gap-3 rounded-xl bg-muted/40 px-3.5 transition-all hover:bg-muted/60 active:scale-[0.98]"
-        >
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-background/80">
-            <DiscordIcon className="h-4 w-4 text-muted-foreground" />
-          </div>
-          <span className="text-sm font-normal text-foreground">{t('actions.joinCommunity')}</span>
-        </a>
-      </div>
-
-      {/* Mobile settings — same role as the desktop row above. */}
-      <div className="px-3 pb-3 pt-2 md:hidden">
+      <div className="flex h-10 items-center border-t border-c-sidebar-border pl-[9px] pr-[6px]">
         <button
-          className="flex min-h-12 w-full items-center gap-3 rounded-xl bg-muted/40 px-3 py-2 transition-all hover:bg-muted/60 active:scale-[0.98]"
-          onClick={onShowSettings}
-          aria-label={t('actions.settings')}
+          type="button"
+          onClick={() => setIsMenuOpen((open) => !open)}
+          aria-haspopup="menu"
+          aria-expanded={isMenuOpen}
+          className="flex h-8 min-w-0 items-center gap-[7px] rounded-md pl-[2px] pr-2 text-left hover:bg-c-hover"
         >
-          <AppUserBadge caption={t('actions.settings')} className="min-w-0 flex-1" />
-          <Settings className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-c-sidebar-border text-[10px] font-semibold text-c-text">
+            {monogram}
+          </span>
+          <span className="min-w-0 truncate text-[14px] leading-5 text-c-text-2">
+            {accountName}
+            {tier && <span className="text-c-text-3"> · {tier}</span>}
+          </span>
+          <ChevronDown className="ml-[10px] h-3 w-3 flex-shrink-0 text-c-text-3" strokeWidth={1.8} />
+        </button>
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={onShowSettings}
+          title={t('actions.settings')}
+          aria-label={t('actions.settings')}
+          className={cn('flex h-7 w-7 items-center justify-center rounded-md text-c-text-2 hover:bg-c-hover hover:text-c-text')}
+        >
+          <Settings className="h-[15px] w-[15px]" strokeWidth={1.6} />
         </button>
       </div>
     </div>

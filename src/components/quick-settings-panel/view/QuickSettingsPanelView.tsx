@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
@@ -10,6 +10,9 @@ import type { PreferenceToggleKey, QuickSettingsPreferences } from '../types';
 import QuickSettingsContent from './QuickSettingsContent';
 import QuickSettingsHandle from './QuickSettingsHandle';
 import QuickSettingsPanelHeader from './QuickSettingsPanelHeader';
+
+/** Dispatched by the sidebar account menu to open these preferences (Claude desktop has no edge handle). */
+export const QUICK_SETTINGS_TOGGLE_EVENT = 'cloudcli:toggle-quick-settings';
 
 export default function QuickSettingsPanelView() {
   const [isOpen, setIsOpen] = useState(false);
@@ -55,16 +58,24 @@ export default function QuickSettingsPanelView() {
     [consumeSuppressedClick],
   );
 
+  useEffect(() => {
+    const toggle = () => setIsOpen((previous) => !previous);
+    window.addEventListener(QUICK_SETTINGS_TOGGLE_EVENT, toggle);
+    return () => window.removeEventListener(QUICK_SETTINGS_TOGGLE_EVENT, toggle);
+  }, []);
+
   return (
     <>
-      <QuickSettingsHandle
+      {/* Desktop reaches these preferences from the account menu; the edge
+          handle stays on touch devices, where there is no hover menu. */}
+      {(isMobile || isOpen) && <QuickSettingsHandle
         isOpen={isOpen}
         isDragging={isDragging}
         style={handleStyle}
         onClick={handleToggleFromHandle}
         onMouseDown={startDrag}
         onTouchStart={startDrag}
-      />
+      />}
 
       <div
         className={`fixed right-0 top-0 z-[9999] h-full w-64 transform border-l border-border bg-background shadow-xl transition-transform duration-150 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'h-screen' : ''}`}

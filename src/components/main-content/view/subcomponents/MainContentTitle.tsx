@@ -1,9 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
-import type { AppTab, Project, ProjectSession } from '../../../../types/app';
-import { usePlugins } from '../../../../contexts/PluginsContext';
+import type { Project, ProjectSession } from '../../../../types/app';
 import { getSessionTitle } from '../../../../utils/pageTitle';
 import { resolveExecutionIdentity, shouldShowProfileIdentity } from '../../../../shared/identity';
 import ExecutionIdentityBadge from '../../../identity/view/ExecutionIdentityBadge';
@@ -12,57 +10,28 @@ import type { SessionLineage } from '../../../session-handoff/types/types';
 import SessionLineageLink from '../../../session-handoff/view/SessionLineageLink';
 
 type MainContentTitleProps = {
-  activeTab: AppTab;
   selectedProject: Project;
   selectedSession: ProjectSession | null;
-  shouldShowTasksTab: boolean;
   /** Backend handoff lineage of `selectedSession` (FT-M05), or null. */
   sessionLineage: SessionLineage | null;
   onNavigateToSession: (sessionId: string) => void;
 };
 
-function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: string) => string, pluginDisplayName?: string) {
-  if (activeTab.startsWith('plugin:') && pluginDisplayName) {
-    return pluginDisplayName;
-  }
-
-  if (activeTab === 'files') {
-    return t('mainContent.projectFiles');
-  }
-
-  if (activeTab === 'git') {
-    return t('tabs.git');
-  }
-
-  if (activeTab === 'tasks' && shouldShowTasksTab) {
-    return 'TaskMaster';
-  }
-
-  if (activeTab === 'browser') {
-    return t('tabs.browser');
-  }
-
-  return 'Project';
-}
-
+/*
+ * Claude desktop conversation title: "Title ⌄" at x=24 of the main column,
+ * 13.5px medium. The chevron opens the conversation menu: project, the
+ * account the session runs under and its handoff lineage.
+ */
 export default function MainContentTitle({
-  activeTab,
   selectedProject,
   selectedSession,
-  shouldShowTasksTab,
   sessionLineage,
   onNavigateToSession,
 }: MainContentTitleProps) {
   const { t } = useTranslation();
-  const { plugins } = usePlugins();
   const { profiles: claudeProfiles } = useClaudeProfiles();
-
-  const pluginDisplayName = activeTab.startsWith('plugin:')
-    ? plugins.find((p) => p.name === activeTab.replace('plugin:', ''))?.displayName
-    : undefined;
-
-  const showSessionIcon = activeTab === 'chat' && Boolean(selectedSession);
-  const showChatNewSession = activeTab === 'chat' && !selectedSession;
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Discreet "which account did this run under" indicator — only meaningful
   // for Claude sessions bound to an account (CLOUDCLI_EXTENSION_PLAN.md F5).
@@ -80,61 +49,65 @@ export default function MainContentTitle({
     profileNamesById: claudeProfileNameById,
     unresolvedLabel: t('mainContent.claudeAccountUnavailable', { defaultValue: 'Unknown account' }),
   }), [sessionProvider, selectedSession?.claudeProfileId, claudeProfileNameById, t]);
-
-  // With a single registered account there is no ambiguity to resolve, so the
-  // header stays silent about accounts entirely.
   const showExecutionIdentity = shouldShowProfileIdentity(claudeProfiles.length);
+  const hasLineage = Boolean(sessionLineage?.incoming || (sessionLineage?.outgoing.length ?? 0) > 0);
+
+  const title = selectedSession ? getSessionTitle(selectedSession) : t('mainContent.newSession');
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const close = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setIsOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setIsOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isOpen]);
 
   return (
-    <div className="scrollbar-hide flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-      {showSessionIcon && (
-        <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-          <LLMProviderLogo provider={selectedSession?.__provider} className="h-4 w-4" />
-        </div>
-      )}
+    <div ref={rootRef} className="relative min-w-0">
+      <button
+        type="button"
+        onClick={() => setIsOpen((open) => !open)}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        title={title}
+        className="flex h-7 min-w-0 max-w-full items-center gap-[9px] rounded-md px-[6px] hover:bg-c-hover"
+      >
+        <span className="truncate text-[13.5px] font-medium leading-5 text-c-text">{title}</span>
+        <svg width="11" height="6" viewBox="0 0 11 6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-c-text-2" aria-hidden="true">
+          <path d="M0.6 0.6L5.5 5.4L10.4 0.6" />
+        </svg>
+      </button>
 
-      <div className="min-w-0 flex-1">
-        {activeTab === 'chat' && selectedSession ? (
-          <div className="min-w-0">
-            <h2 title={getSessionTitle(selectedSession)} className="truncate text-sm font-semibold leading-tight text-foreground">
-              {getSessionTitle(selectedSession)}
-            </h2>
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground">
-              <span className="min-w-0 truncate" title={selectedProject.displayName}>
-                {selectedProject.displayName}
-              </span>
-              {showExecutionIdentity && executionIdentity.profileLabel && (
-                <>
-                  <span aria-hidden="true" className="flex-shrink-0">·</span>
-                  <ExecutionIdentityBadge identity={executionIdentity} className="max-w-[45%] flex-shrink-0" />
-                </>
-              )}
-              {(sessionLineage?.incoming || (sessionLineage?.outgoing.length ?? 0) > 0) && (
-                <>
-                  <span aria-hidden="true" className="flex-shrink-0">·</span>
+      {isOpen && (
+        <div
+          role="menu"
+          className="absolute left-0 top-[32px] z-50 w-[280px] rounded-[10px] border border-c-card-border bg-c-surface p-1 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+        >
+          <div className="px-2.5 pb-1.5 pt-1.5">
+            <div className="truncate text-[13px] text-c-text" title={selectedProject.fullPath}>{selectedProject.displayName}</div>
+            {(showExecutionIdentity && executionIdentity.profileLabel) || hasLineage ? (
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-c-text-3">
+                {showExecutionIdentity && executionIdentity.profileLabel && (
+                  <ExecutionIdentityBadge identity={executionIdentity} className="max-w-[60%] flex-shrink-0" />
+                )}
+                {hasLineage && (
                   <SessionLineageLink
                     lineage={sessionLineage}
-                    onNavigateToSession={onNavigateToSession}
-                    className="min-w-0 max-w-[45%] truncate text-left underline-offset-2 hover:underline"
+                    onNavigateToSession={(id) => { setIsOpen(false); onNavigateToSession(id); }}
+                    className="min-w-0 truncate text-left underline-offset-2 hover:underline"
                   />
-                </>
-              )}
-            </div>
+                )}
+              </div>
+            ) : null}
           </div>
-        ) : showChatNewSession ? (
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
-            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
-          </div>
-        ) : (
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold leading-tight text-foreground">
-              {getTabTitle(activeTab, shouldShowTasksTab, t, pluginDisplayName)}
-            </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

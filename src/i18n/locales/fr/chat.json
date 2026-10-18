@@ -104,7 +104,7 @@
     "technicalDetails": "Détails techniques"
   },
   "input": {
-    "placeholder": "Tapez / pour les commandes, @ pour les fichiers, ou posez une question à {{provider}}...",
+    "placeholder": "Tapez / pour les commandes",
     "placeholderDefault": "Tapez votre message...",
     "disabled": "Saisie désactivée",
     "attachFiles": "Joindre des fichiers",

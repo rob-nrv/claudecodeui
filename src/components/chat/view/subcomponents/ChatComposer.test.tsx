@@ -112,45 +112,30 @@ function slot(markup: string, name: string) {
 
 const count = (markup: string, needle: string) => markup.split(needle).length - 1;
 
-test('the footer wraps instead of letting tools and actions shrink into each other', () => {
+// Claude desktop composer: one box (attach, input, primary actions) and a row
+// under it (permission mode on the left; model, effort and context on the right).
+
+test('primary actions never shrink and the mode / model controls sit under the box', () => {
   const markup = render();
-  assert.ok(slot(markup, 'prompt-input-footer').classes.includes('flex-wrap'));
-
-  const tools = slot(markup, 'prompt-input-tools').classes;
-  assert.ok(tools.includes('shrink-0'));
-  assert.ok(!tools.includes('min-w-0'), 'a shrinkable tools row spills its buttons under the actions');
-
-  const actions = slot(markup, 'composer-actions').classes;
-  assert.ok(actions.includes('shrink-0'));
-  assert.ok(actions.includes('ml-auto'), 'wrapped actions must stay right-aligned');
-});
-
-test('the helper hint sits outside the primary actions and only takes leftover room', () => {
-  const markup = render();
-  const tools = slot(markup, 'prompt-input-tools');
-  const hint = slot(markup, 'composer-hint');
   const actions = slot(markup, 'composer-actions');
+  assert.ok(actions.classes.includes('flex-shrink-0'), 'a shrinkable actions cluster collapses into the input');
 
-  assert.ok(tools.index < hint.index && hint.index < actions.index);
-  for (const cls of ['hidden', 'lg:flex', 'min-w-0', 'flex-1', 'basis-0', 'h-4', 'overflow-hidden', 'flex-wrap']) {
-    assert.ok(hint.classes.includes(cls), `hint is missing ${cls}`);
-  }
-  assert.ok(!hint.classes.includes('shrink-0'));
-  assert.ok(hint.tag.includes(`title="${ENTER_HINT}"`), 'the full hint stays available on hover');
-  assert.doesNotMatch(markup.slice(actions.index), /Shift\+Enter/);
-
-  const segments = [...markup.slice(hint.index, actions.index).matchAll(/<span class="max-w-full truncate">([^<]*)<\/span>/g)]
-    .map((match) => match[1]);
-  assert.deepEqual(segments, ['Enter to send', '• Shift+Enter for new line', '• Tab to change modes', '• / for slash commands']);
+  const formEnd = markup.indexOf('</form>');
+  assert.ok(formEnd > actions.index, 'send / stop stay inside the box');
+  assert.ok(markup.indexOf('aria-label="Select model and reasoning effort"') > formEnd, 'model menu is in the row under the box');
+  assert.ok(markup.indexOf('aria-label="How should Claude actions be approved?"') > formEnd, 'permission mode is in the row under the box');
 });
 
-test('a running composer with a draft keeps one queue hint phrase and each primary control once', () => {
+test('the keyboard hint is announced with the input instead of being drawn in the footer', () => {
+  const markup = render();
+  assert.match(markup, /aria-describedby="chat-composer-hint"/);
+  assert.ok(markup.includes(`<span id="chat-composer-hint" class="sr-only">${ENTER_HINT}</span>`), 'the full hint is announced');
+  assert.equal(count(markup, 'Shift+Enter'), 1, 'the hint is not repeated visibly');
+});
+
+test('a running composer with a draft keeps the queue hint and each primary control once', () => {
   const markup = render({ isLoading: true, input: 'follow up', hasInput: true });
-  const hint = slot(markup, 'composer-hint');
-  const actions = slot(markup, 'composer-actions');
-
-  assert.match(hint.tag, /title="Enter to queue your next message"/);
-  assert.equal(count(markup.slice(hint.index, actions.index), '<span class="max-w-full truncate">'), 1);
+  assert.ok(markup.includes('<span id="chat-composer-hint" class="sr-only">Enter to queue your next message</span>'));
   assert.equal(count(markup, 'aria-label="Queue next message"'), 1);
   assert.equal(count(markup, 'aria-label="Steer now'), 1);
   assert.equal(count(markup, 'aria-label="Select model and reasoning effort"'), 1);
@@ -165,11 +150,8 @@ test('an idle composer renders send, model and attach exactly once', () => {
   assert.equal(count(markup, '>Opus 4.8<'), 1);
 });
 
-test('the slash-command badge grows for multi-digit counts instead of overflowing a fixed circle', () => {
-  const markup = render({ slashCommandsCount: 128 });
-  const badge = markup.match(/<span class="([^"]*)">128<\/span>/);
-  assert.ok(badge, 'badge keeps the full count');
-  const classes = badge[1].split(/\s+/);
-  assert.ok(classes.includes('min-w-4') && classes.includes('h-4'));
-  assert.ok(!classes.includes('w-4'));
+test('a running composer without a draft offers stop, not send', () => {
+  const markup = render({ isLoading: true });
+  assert.equal(count(markup, 'aria-label="Stop"'), 1);
+  assert.equal(count(markup, 'aria-label="Send"'), 0);
 });

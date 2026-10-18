@@ -12,6 +12,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useClaudeProfiles } from '../../settings/hooks/useClaudeProfiles';
 import { useRuntimeNodes } from '../../runtime-nodes/hooks/useRuntimeNodes';
 import {
@@ -29,6 +30,9 @@ import SessionLineageNotice from '../../session-handoff/view/SessionLineageNotic
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 import CommandResultModal from './subcomponents/CommandResultModal';
+import ChatSidePanel from './subcomponents/ChatSidePanel';
+import ActivityIndicator from './subcomponents/ActivityIndicator';
+import UsageLimitBanner from './subcomponents/UsageLimitBanner';
 
 function ChatInterface({
   isActive,
@@ -120,6 +124,8 @@ function ChatInterface({
   // (CLOUDCLI_EXTENSION_PLAN.md F4/F5). Re-fetched independently of Settings'
   // own profile list so this view has no dependency on Settings being open.
   const { profiles: claudeProfiles } = useClaudeProfiles();
+  const { preferences: uiPreferences } = useUiPreferences();
+  const isSidePanelVisible = uiPreferences.sidePanelVisible;
   const [selectedClaudeProfileId, setSelectedClaudeProfileId] = useState<string | null>(null);
 
   // Tapping "+ New Session" bumps `newSessionTrigger`; treat that as the
@@ -586,9 +592,25 @@ function ChatInterface({
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           selectedProject={selectedProject}
+          footer={hasActivityIndicator ? (
+            <ActivityIndicator activity={sessionActivity} onAbort={handleAbortSession} isInputFocused={isInputFocused} />
+          ) : null}
+          sidePanel={isSidePanelVisible ? (
+            <ChatSidePanel
+              project={selectedProject}
+              session={selectedSession}
+              runtimeListing={runtimeNodes.listing}
+              creationTarget={runtimeTarget}
+              tokenBudget={tokenBudget}
+              messages={chatMessages}
+              onFileOpen={onFileOpen ? (filePath) => onFileOpen(filePath) : undefined}
+              onShowSettings={onShowSettings}
+              onSelectNode={selectedSession ? undefined : selectRuntimeNode}
+            />
+          ) : null}
         />
 
-        <div className="relative flex-shrink-0">
+        <div className={`claude-composer-host relative flex-shrink-0 md:pr-3 ${isSidePanelVisible ? "has-side-panel" : ""}`}>
           {showHandoffNotice && incomingHandoff && handoffNoticeLabels && (
             <SessionLineageNotice
               targetLabel={handoffNoticeLabels.target}
@@ -604,16 +626,28 @@ function ChatInterface({
             />
           )}
           {isUserScrolledUp && chatMessages.length > 0 && (
-            <div className="pointer-events-none absolute -top-11 left-0 right-0 z-20 flex justify-center">
-              <button
-                type="button"
-                onClick={scrollToBottomAndReset}
-                aria-label={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
-                className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
-                title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
-              >
-                <ArrowDownIcon className="h-4 w-4" aria-hidden />
-              </button>
+            /* Claude desktop (live app): a 34 px dark disc centred on the composer,
+               20 px above it — three accent dots while Claude works, else an arrow. */
+            <div className="pointer-events-none absolute -top-[54px] left-0 right-0 z-20 md:pr-3">
+              <div className="claude-box flex justify-center">
+                <button
+                  type="button"
+                  onClick={scrollToBottomAndReset}
+                  aria-label={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
+                  className={`pointer-events-auto flex h-[34px] w-[34px] items-center justify-center rounded-full border bg-gradient-to-b from-[#2e2e2d] to-[#222221] text-c-text-2 transition-colors hover:text-c-text ${isProcessing ? 'border-c-accent/50' : 'border-c-input-border'}`}
+                  title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
+                >
+                  {isProcessing ? (
+                    <span className="flex items-center gap-[2px]" aria-hidden>
+                      <span className="h-[4px] w-[4px] rounded-full bg-c-accent" />
+                      <span className="h-[5px] w-[5px] rounded-full bg-c-accent" />
+                      <span className="h-[4px] w-[4px] rounded-full bg-c-accent" />
+                    </span>
+                  ) : (
+                    <ArrowDownIcon className="h-4 w-4" aria-hidden />
+                  )}
+                </button>
+              </div>
             </div>
           )}
 
@@ -685,6 +719,12 @@ function ChatInterface({
           placeholder={t('input.placeholder', { provider: selectedProviderLabel })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
+          usageBanner={provider === 'claude' ? (
+            <UsageLimitBanner
+              claudeProfileId={selectedSession ? (selectedSession.claudeProfileId ?? null) : resolvedClaudeProfileId}
+              onShowDetails={onShowSettings}
+            />
+          ) : null}
         />
         </div>
       </div>

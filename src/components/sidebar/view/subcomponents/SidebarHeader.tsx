@@ -1,16 +1,19 @@
-import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { useState } from 'react';
+import {
+  Activity,
+  Archive,
+  BriefcaseBusiness,
+  Ellipsis,
+  FolderPlus,
+  Plus,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Button, Input, Tooltip } from '../../../../shared/view/ui';
-import { CLOUDCLI_WORDMARK_FONT_FAMILY } from '../../../../shared/constants';
-import { IS_PLATFORM } from '../../../../shared/utils';
 import { cn } from '../../../../lib/utils';
 import type { SidebarSearchMode } from '../../types/types';
-
-import GitHubStarBadge from './GitHubStarBadge';
-
-const MOD_KEY =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
 type SidebarHeaderProps = {
   isPWA: boolean;
@@ -28,9 +31,24 @@ type SidebarHeaderProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
+  onNewSession: () => void;
+  onShowSettings: () => void;
   onCollapseSidebar: () => void;
   t: TFunction;
 };
+
+/*
+ * Claude desktop sidebar header, measured from the reference capture:
+ * 36px window row (menu, panel toggle, back, forward), a 264×26 search field
+ * at x=3/y=43, then a 26.67px-pitch nav list (New, Customize, More).
+ * Claude's Chat/Code switch and Artifacts entry have no CloudCLI counterpart
+ * and are intentionally not rendered (no decoration without a function).
+ */
+const iconButton =
+  'flex h-7 w-7 items-center justify-center rounded-md text-c-text-2 transition-colors hover:bg-c-hover hover:text-c-text disabled:opacity-40';
+
+const navRow =
+  'flex h-[26.67px] w-full items-center gap-[9px] rounded-md pl-[9px] pr-2 text-left text-[14px] leading-5 text-c-text-2 transition-colors hover:bg-c-hover hover:text-c-text';
 
 export default function SidebarHeader({
   isPWA,
@@ -48,330 +66,171 @@ export default function SidebarHeader({
   onRefresh,
   isRefreshing,
   onCreateProject,
+  onNewSession,
+  onShowSettings,
   onCollapseSidebar,
   t,
 }: SidebarHeaderProps) {
-  const showSearchTools = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
+  const [isMoreOpen, setIsMoreOpen] = useState(searchMode !== 'projects');
+  const showSearch = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
   const searchPlaceholder = searchMode === 'conversations'
     ? t('search.conversationsPlaceholder')
     : searchMode === 'archived'
       ? t('search.archivedPlaceholder', 'Search archived sessions...')
       : searchMode === 'running'
         ? t('search.runningPlaceholder', 'Search running sessions...')
-        : t('projects.searchPlaceholder');
-  const runningBadgeText = runningSessionsCount > 99 ? '99+' : String(runningSessionsCount);
+        : t('search.placeholderShort', 'Search');
 
-  const LogoBlock = () => (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-primary/90 shadow-sm">
-        <svg className="h-3.5 w-3.5 text-primary-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-      </div>
-      <h1
-        className="truncate text-sm font-bold tracking-tight text-foreground"
-        style={{ fontFamily: CLOUDCLI_WORDMARK_FONT_FAMILY }}
-      >
-        {t('app.title')}
-      </h1>
-    </div>
+  const moreRow = (mode: SidebarSearchMode, Icon: typeof Activity, label: string, badge?: number) => (
+    <button
+      type="button"
+      onClick={() => onSearchModeChange(searchMode === mode ? 'projects' : mode)}
+      aria-pressed={searchMode === mode}
+      className={cn(navRow, 'pl-[30px]', searchMode === mode && 'bg-c-active text-c-text')}
+    >
+      <Icon className="h-[14px] w-[14px] flex-shrink-0" strokeWidth={1.6} />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge ? <span className="text-[12px] tabular-nums text-c-text-3">{badge > 99 ? '99+' : badge}</span> : null}
+    </button>
   );
 
   return (
-    <div className="flex-shrink-0">
-      {/* Desktop header */}
-      <div
-        className="hidden px-3 pb-2 pt-3 md:block"
-        style={{}}
-      >
-        <div className="flex items-center justify-between gap-2">
-          {IS_PLATFORM ? (
-            <a
-              href="https://cloudcli.ai/dashboard"
-              className="flex min-w-0 items-center gap-2.5 transition-opacity hover:opacity-80"
-              title={t('tooltips.viewEnvironments')}
-            >
-              <LogoBlock />
-            </a>
-          ) : (
-            <LogoBlock />
-          )}
-
-          <div className="flex flex-shrink-0 items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onRefresh}
-              disabled={isRefreshing}
-              title={t('tooltips.refresh')}
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${
-                  isRefreshing ? 'animate-spin' : ''
-                }`}
-              />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onCreateProject}
-              title={t('tooltips.createProject')}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onCollapseSidebar}
-              title={t('tooltips.hideSidebar')}
-            >
-              <PanelLeftClose className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+    <div
+      className="flex-shrink-0 select-none"
+      style={isPWA && isMobile ? { paddingTop: '12px' } : undefined}
+    >
+      {/* Window row (live app, 2026-10-18): icon centres x = 25.5 / 57.5 / 89.5 / 119.5, y = 17.5;
+          Chat / Code switch at x = 210–279, y = 4–31. */}
+      <div className="relative h-9">
+        <button type="button" className={cn(iconButton, 'absolute left-[11.5px] top-[3.5px] text-c-text')} onClick={onShowSettings} title={t('tooltips.settings', 'Settings')} aria-label={t('tooltips.settings', 'Settings')}>
+          <svg width="14" height="10" viewBox="0 0 14 10" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
+            <path d="M0.65 0.65H13.35M0.65 5H13.35M0.65 9.35H7.35" />
+          </svg>
+        </button>
+        {!isMobile && (
+          <>
+            <button type="button" className={cn(iconButton, 'absolute left-[43.5px] top-[3.5px] text-c-text')} onClick={onCollapseSidebar} title={t('tooltips.hideSidebar')} aria-label={t('tooltips.hideSidebar')}>
+              <svg width="14" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+                <rect x="0.6" y="0.6" width="12.8" height="10.8" rx="1.6" />
+                <path d="M3.9 0.6V11.4" />
+              </svg>
+            </button>
+            <button type="button" className={cn(iconButton, 'absolute left-[75.5px] top-[3.5px] text-c-text')} onClick={() => window.history.back()} title={t('tooltips.back', 'Back')} aria-label={t('tooltips.back', 'Back')}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M11.35 6H0.65M5.65 0.65L0.65 6L5.65 11.35" />
+              </svg>
+            </button>
+            <button type="button" className={cn(iconButton, 'absolute left-[105.5px] top-[3.5px] text-[#807f7e]')} onClick={() => window.history.forward()} title={t('tooltips.forward', 'Forward')} aria-label={t('tooltips.forward', 'Forward')}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M0.65 6H11.35M6.35 0.65L11.35 6L6.35 11.35" />
+              </svg>
+            </button>
+          </>
+        )}
+        {/* Claude's Chat / Code switch drives CloudCLI's two sidebar lists:
+            all conversations (Chat) or conversations grouped by project (Code). */}
+        <div role="radiogroup" aria-label={t('search.listMode', 'Sidebar list')} className="absolute right-[7px] top-[4px] flex h-[28px] w-[70px] rounded-[8px] bg-c-search p-px">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={searchMode === 'conversations'}
+            onClick={() => onSearchModeChange('conversations')}
+            title={t('search.modeConversations')}
+            aria-label={t('search.modeConversations')}
+            className={cn('flex flex-1 items-center justify-center rounded-[7px] text-c-text-2 hover:text-c-text', searchMode === 'conversations' && 'bg-c-active text-c-text')}
+          >
+            <svg width="14" height="13" viewBox="0 0 14 13" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" aria-hidden="true">
+              <path d="M5.6 0.7C8.3 0.7 10.5 2.6 10.5 4.9C10.5 7.2 8.3 9.1 5.6 9.1C5 9.1 4.4 9 3.9 8.8L1.3 9.6L2 7.6C1.2 6.9 0.7 5.9 0.7 4.9C0.7 2.6 2.9 0.7 5.6 0.7Z" />
+              <path d="M11.6 4.4C12.6 5.1 13.3 6.1 13.3 7.3C13.3 8.2 12.9 9.1 12.2 9.7L12.8 11.5L10.6 10.8C10.1 11 9.6 11.1 9 11.1C7.9 11.1 6.9 10.8 6.1 10.2" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={searchMode !== 'conversations'}
+            onClick={() => onSearchModeChange('projects')}
+            title={t('search.modeProjects')}
+            aria-label={t('search.modeProjects')}
+            className={cn('flex flex-1 items-center justify-center rounded-[7px] text-c-text-2 hover:text-c-text', searchMode !== 'conversations' && 'bg-c-active text-c-text')}
+          >
+            <svg width="14" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4.2 2.4L0.8 6L4.2 9.6M9.8 2.4L13.2 6L9.8 9.6M8.1 0.8L5.9 11.2" />
+            </svg>
+          </button>
         </div>
+      </div>
 
-        <GitHubStarBadge />
-
-        {/* Search bar */}
-        {showSearchTools && (
-          <div className="mt-2.5 space-y-2">
-            {/* Search mode toggle */}
-            <div className="flex gap-1 rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
-              <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('running')}
-                  aria-pressed={searchMode === 'running'}
-                  aria-label={t('search.runningTooltip', 'Running sessions')}
-                  title={t('search.runningTooltip', 'Running sessions')}
-                  className={cn(
-                    "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'running'
-                      ? "bg-background shadow-sm text-foreground ring-1 ring-emerald-500/15"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <span className="relative flex h-3 w-3 items-center justify-center">
-                    <Activity className={cn("h-3 w-3", runningSessionsCount > 0 && "text-emerald-500")} />
-                    {runningSessionsCount > 0 && (
-                      <span className="absolute -right-2.5 -top-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-semibold leading-none text-white shadow-sm ring-1 ring-background">
-                        {runningBadgeText}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              </Tooltip>
-              <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('archived')}
-                  aria-pressed={searchMode === 'archived'}
-                  aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
-                  title={t('search.archiveOnlyTooltip', 'Archive only')}
-                  className={cn(
-                    "flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'archived'
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Archive className="h-3 w-3" />
-                </button>
-              </Tooltip>
-            </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
-              <Input
-                type="text"
-                placeholder={searchPlaceholder}
-                value={searchFilter}
-                onChange={(event) => onSearchFilterChange(event.target.value)}
-                className="nav-search-input h-9 rounded-xl border-0 pl-9 pr-14 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {searchFilter ? (
-                <button
-                  onClick={onClearSearchFilter}
-                  aria-label={t('tooltips.clearSearch')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 hover:bg-accent"
-                >
-                  <X className="h-3 w-3 text-muted-foreground" />
-                </button>
-              ) : (
-                <kbd
-                  aria-hidden
-                  title={t('tooltips.openCommandPalette')}
-                  className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground md:inline-flex"
-                >
-                  {MOD_KEY}
-                  <span>K</span>
-                </kbd>
-              )}
-            </div>
-          </div>
+      {/* Search */}
+      <div className="relative ml-[10px] mr-3 mt-[8px]">
+        <Search className="pointer-events-none absolute left-[9px] top-1/2 h-[13px] w-[13px] -translate-y-1/2 text-c-text-3" strokeWidth={1.8} />
+        <input
+          type="text"
+          value={searchFilter}
+          onChange={(event) => onSearchFilterChange(event.target.value)}
+          placeholder={searchPlaceholder}
+          disabled={!showSearch}
+          className="block h-[26px] w-full rounded-[6px] border border-c-active bg-c-search pl-[31px] pr-7 text-[14px] leading-5 text-c-text outline-none transition-colors placeholder:text-c-text-3 focus:border-c-input-border"
+          aria-label={searchPlaceholder}
+        />
+        {searchFilter && (
+          <button
+            type="button"
+            onClick={onClearSearchFilter}
+            aria-label={t('tooltips.clearSearch')}
+            className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-c-text-3 hover:text-c-text"
+          >
+            <X className="h-3 w-3" />
+          </button>
         )}
       </div>
 
-      {/* Desktop divider */}
-      <div className="nav-divider hidden md:block" />
-
-      {/* Mobile header */}
-      <div
-        className="p-3 pb-2 md:hidden"
-        style={isPWA && isMobile ? { paddingTop: '16px' } : {}}
-      >
-        <div className="flex items-center justify-between">
-          {IS_PLATFORM ? (
-            <a
-              href="https://cloudcli.ai/dashboard"
-              className="flex min-w-0 items-center gap-2.5 transition-opacity active:opacity-70"
-              title={t('tooltips.viewEnvironments')}
-            >
-              <LogoBlock />
-            </a>
-          ) : (
-            <LogoBlock />
-          )}
-
-          <div className="flex flex-shrink-0 gap-1.5">
-            <button
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 transition-all active:scale-95"
-              onClick={onRefresh}
-              disabled={isRefreshing}
-            >
-              <RefreshCw className={`h-4 w-4 text-muted-foreground ${isRefreshing ? 'animate-spin' : ''}`} />
+      {/* Nav */}
+      <nav className="mt-[7px] px-[10px]">
+        <button type="button" className={cn(navRow, 'gap-[7px] pl-[7px]')} onClick={onNewSession}>
+          <span className="flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-c-icon-bg text-c-text">
+            <Plus className="h-[12px] w-[12px]" strokeWidth={2} />
+          </span>
+          <span className="truncate">{t('actions.new', 'New')}</span>
+        </button>
+        {/* Claude's 4th entry is Artifacts, which CloudCLI does not have; the slot
+            shows CloudCLI's live sessions instead (same geometry, real data). */}
+        <button
+          type="button"
+          className={cn(navRow, searchMode === 'running' && 'bg-c-active text-c-text')}
+          onClick={() => onSearchModeChange(searchMode === 'running' ? 'projects' : 'running')}
+          aria-pressed={searchMode === 'running'}
+        >
+          <Activity className="h-[14px] w-[14px] flex-shrink-0" strokeWidth={1.6} />
+          <span className="min-w-0 flex-1 truncate">{t('search.modeRunning', 'Running')}</span>
+          {runningSessionsCount > 0 && <span className="text-[12px] tabular-nums text-c-text-3">{runningSessionsCount > 99 ? '99+' : runningSessionsCount}</span>}
+        </button>
+        <button type="button" className={navRow} onClick={onShowSettings}>
+          <BriefcaseBusiness className="h-[14px] w-[14px] flex-shrink-0" strokeWidth={1.6} />
+          <span className="truncate">{t('actions.customize', 'Customize')}</span>
+        </button>
+        <button
+          type="button"
+          className={navRow}
+          onClick={() => setIsMoreOpen((open) => !open)}
+          aria-expanded={isMoreOpen}
+        >
+          <Ellipsis className="h-[14px] w-[14px] flex-shrink-0" strokeWidth={1.8} />
+          <span className="truncate">{t('actions.more', 'More')}</span>
+        </button>
+        {isMoreOpen && (
+          <div>
+            {moreRow('archived', Archive, t('search.archiveOnlyTooltip', 'Archived'), archivedSessionsCount)}
+            <button type="button" className={cn(navRow, 'pl-[30px]')} onClick={onCreateProject}>
+              <FolderPlus className="h-[14px] w-[14px] flex-shrink-0" strokeWidth={1.6} />
+              <span className="truncate">{t('actions.openProject', 'Open or create a project')}</span>
             </button>
-            <button
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground transition-all active:scale-95"
-              onClick={onCreateProject}
-            >
-              <FolderPlus className="h-4 w-4" />
+            <button type="button" className={cn(navRow, 'pl-[30px]')} onClick={onRefresh} disabled={isRefreshing}>
+              <RefreshCw className={cn('h-[14px] w-[14px] flex-shrink-0', isRefreshing && 'animate-spin')} strokeWidth={1.6} />
+              <span className="truncate">{t('tooltips.refresh')}</span>
             </button>
-          </div>
-        </div>
-
-        {/* Mobile search */}
-        {showSearchTools && (
-          <div className="mt-2.5 space-y-2">
-            <div className="flex gap-1 rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
-              <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('running')}
-                  aria-pressed={searchMode === 'running'}
-                  aria-label={t('search.runningTooltip', 'Running sessions')}
-                  title={t('search.runningTooltip', 'Running sessions')}
-                  className={cn(
-                    "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'running'
-                      ? "bg-background shadow-sm text-foreground ring-1 ring-emerald-500/15"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <span className="relative flex h-3 w-3 items-center justify-center">
-                    <Activity className={cn("h-3 w-3", runningSessionsCount > 0 && "text-emerald-500")} />
-                    {runningSessionsCount > 0 && (
-                      <span className="absolute -right-2.5 -top-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-semibold leading-none text-white shadow-sm ring-1 ring-background">
-                        {runningBadgeText}
-                      </span>
-                    )}
-                  </span>
-                  <span className="sr-only">{t('search.modeRunning', 'Running')}</span>
-                </button>
-              </Tooltip>
-              <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
-                <button
-                  onClick={() => onSearchModeChange('archived')}
-                  aria-pressed={searchMode === 'archived'}
-                  aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
-                  title={t('search.archiveOnlyTooltip', 'Archive only')}
-                  className={cn(
-                    "flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'archived'
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Archive className="h-3 w-3" />
-                </button>
-              </Tooltip>
-            </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
-              <Input
-                type="text"
-                placeholder={searchPlaceholder}
-                value={searchFilter}
-                onChange={(event) => onSearchFilterChange(event.target.value)}
-                className="nav-search-input h-10 rounded-xl border-0 pl-10 pr-9 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {searchFilter && (
-                <button
-                  onClick={onClearSearchFilter}
-                  aria-label={t('tooltips.clearSearch')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 hover:bg-accent"
-                >
-                  <X className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-              )}
-            </div>
           </div>
         )}
-      </div>
-
-      {/* Mobile divider */}
-      <div className="nav-divider md:hidden" />
+      </nav>
     </div>
   );
 }

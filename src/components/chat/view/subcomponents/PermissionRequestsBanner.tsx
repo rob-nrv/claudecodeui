@@ -1,5 +1,5 @@
-import React from 'react';
-import { ShieldAlertIcon, TimerOffIcon } from 'lucide-react';
+import React, { useState } from 'react';
+import { TimerOffIcon } from 'lucide-react';
 
 import type { PendingPermissionRequest } from '../../types/types';
 import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
@@ -7,13 +7,6 @@ import { getClaudeSettings } from '../../utils/chatStorage';
 import { isAwaitingPermissionDecision } from '../../utils/permissionRequestState';
 import { getPermissionPanel, registerPermissionPanel } from '../../tools/configs/permissionPanelRegistry';
 import { AskUserQuestionPanel } from '../../tools/components/InteractiveRenderers';
-import {
-  Confirmation,
-  ConfirmationTitle,
-  ConfirmationRequest,
-  ConfirmationActions,
-  ConfirmationAction,
-} from '../../../../shared/view/ui';
 
 registerPermissionPanel('AskUserQuestion', AskUserQuestionPanel);
 
@@ -131,7 +124,6 @@ export default function PermissionRequestsBanner({
         const permissionEntry = buildClaudeToolPermissionEntry(request.toolName, rawInput);
         const settings = getClaudeSettings();
         const alreadyAllowed = permissionEntry ? settings.allowedTools.includes(permissionEntry) : false;
-        const rememberLabel = alreadyAllowed ? 'Allow (saved)' : 'Allow & remember';
         const matchingRequestIds = permissionEntry
           ? pendingPermissionRequests
               .filter(
@@ -143,68 +135,129 @@ export default function PermissionRequestsBanner({
           : [request.requestId];
 
         return (
-          <Confirmation key={request.requestId} approval="pending">
-            <ConfirmationTitle className="flex items-start gap-3">
-              <ShieldAlertIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <ConfirmationRequest>
-                <div>
-                  <span className="font-medium text-foreground">Permission required</span>
-                  <span className="ml-2 text-muted-foreground">
-                    Tool: <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{request.toolName}</code>
-                  </span>
-                </div>
-                {permissionEntry && (
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    Allow rule: <code className="rounded bg-muted px-1 py-0.5 text-xs">{permissionEntry}</code>
-                  </div>
-                )}
-                {request.notice === 'not_sent' && <NotSentNotice />}
-                {isSubmitting && <p className="mt-1 text-xs text-muted-foreground">Sending your answer…</p>}
-              </ConfirmationRequest>
-            </ConfirmationTitle>
-
-            {rawInput && (
-              <details className="mt-2">
-                <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                  View tool input
-                </summary>
-                <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-2 text-xs text-muted-foreground">
-                  {rawInput}
-                </pre>
-              </details>
-            )}
-
-            <ConfirmationActions>
-              <ConfirmationAction
-                variant="outline"
-                onClick={() => handlePermissionDecision(request.requestId, { allow: false, message: 'User denied tool use' })}
-                disabled={isSubmitting}
-              >
-                Deny
-              </ConfirmationAction>
-              <ConfirmationAction
-                variant="outline"
-                onClick={() => {
-                  if (permissionEntry && !alreadyAllowed) {
-                    handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName });
-                  }
-                  handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
-                }}
-                disabled={isSubmitting || !permissionEntry}
-              >
-                {rememberLabel}
-              </ConfirmationAction>
-              <ConfirmationAction
-                variant="default"
-                onClick={() => handlePermissionDecision(request.requestId, { allow: true })}
-                disabled={isSubmitting}
-              >
-                Allow once
-              </ConfirmationAction>
-            </ConfirmationActions>
-          </Confirmation>
+          <ClaudePermissionCard
+            key={request.requestId}
+            toolName={request.toolName}
+            input={request.input}
+            rawInput={rawInput}
+            permissionEntry={permissionEntry}
+            alreadyAllowed={alreadyAllowed}
+            isSubmitting={isSubmitting}
+            notSent={request.notice === 'not_sent'}
+            onAllowOnce={() => handlePermissionDecision(request.requestId, { allow: true })}
+            onAllowAndRemember={() => {
+              if (permissionEntry && !alreadyAllowed) {
+                handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName });
+              }
+              handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
+            }}
+            onDeny={(message) => handlePermissionDecision(request.requestId, { allow: false, message: message || 'User denied tool use' })}
+          />
         );
       })}
+    </div>
+  );
+}
+
+type ClaudePermissionCardProps = {
+  toolName: string;
+  input: unknown;
+  rawInput: string;
+  permissionEntry: string | null;
+  alreadyAllowed: boolean;
+  isSubmitting: boolean;
+  notSent: boolean;
+  onAllowOnce: () => void;
+  onAllowAndRemember: () => void;
+  onDeny: (message?: string) => void;
+};
+
+/*
+ * Claude Code permission prompt (reference X2/X3: "Allow this bash command?",
+ * numbered answers, "Tell Claude what to do instead", "Esc to cancel"). The
+ * reference is Claude Code's VS Code panel — no desktop capture of this
+ * prompt exists yet — so only its structure and wording are reused.
+ */
+function ClaudePermissionCard({
+  toolName,
+  input,
+  rawInput,
+  permissionEntry,
+  alreadyAllowed,
+  isSubmitting,
+  notSent,
+  onAllowOnce,
+  onAllowAndRemember,
+  onDeny,
+}: ClaudePermissionCardProps) {
+  const [focused, setFocused] = useState(0);
+  const [instead, setInstead] = useState('');
+  const fields = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  const command = typeof fields.command === 'string' ? fields.command : null;
+  const description = typeof fields.description === 'string' ? fields.description : null;
+  const filePath = typeof fields.file_path === 'string' ? fields.file_path : null;
+  const subject = toolName === 'Bash' ? 'bash command' : toolName === 'Edit' || toolName === 'Write' || toolName === 'MultiEdit' ? 'edit' : `${toolName} call`;
+
+  const options = [
+    { label: 'Yes', run: onAllowOnce, disabled: false },
+    ...(permissionEntry
+      ? [{ label: alreadyAllowed ? `Yes (${permissionEntry} is already allowed)` : `Yes, allow ${permissionEntry} for this project (just you)`, run: onAllowAndRemember, disabled: false }]
+      : []),
+    { label: 'No', run: () => onDeny(), disabled: false },
+  ];
+
+  return (
+    <div
+      role="alertdialog"
+      aria-label={`Allow this ${subject}?`}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.target instanceof HTMLInputElement) return;
+        const index = Number(event.key) - 1;
+        if (index >= 0 && index < options.length) { event.preventDefault(); options[index].run(); }
+        else if (event.key === 'ArrowDown') { event.preventDefault(); setFocused((value) => Math.min(options.length - 1, value + 1)); }
+        else if (event.key === 'ArrowUp') { event.preventDefault(); setFocused((value) => Math.max(0, value - 1)); }
+        else if (event.key === 'Enter') { event.preventDefault(); options[focused].run(); }
+        else if (event.key === 'Escape') { event.preventDefault(); onDeny(); }
+      }}
+      className="rounded-[10px] border border-c-card-border bg-c-surface p-2 text-[14px] leading-5 text-c-text outline-none"
+    >
+      <p className="px-[2px] font-semibold">Allow this {subject}?</p>
+      {(command || filePath) && (
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap px-[2px] font-[family-name:var(--c-mono)] text-[13px] leading-5 text-c-text">{command ?? filePath}</pre>
+      )}
+      {!command && !filePath && rawInput && (
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap px-[2px] font-[family-name:var(--c-mono)] text-[12px] leading-[18px] text-c-text-2">{rawInput}</pre>
+      )}
+      {description && <p className="mt-1 px-[2px] text-[13px] text-c-text-3">{description}</p>}
+      {notSent && <NotSentNotice />}
+      <div className="mt-2 space-y-[6px]">
+        {options.map((option, index) => (
+          <button
+            key={option.label}
+            type="button"
+            onClick={option.run}
+            onMouseEnter={() => setFocused(index)}
+            disabled={isSubmitting || option.disabled}
+            className={`flex h-[28px] w-full items-center gap-2 rounded-[4px] border px-2 text-left text-[13px] font-semibold disabled:opacity-50 ${focused === index ? 'border-transparent bg-[#2a7aa0] text-white' : 'border-c-card-border text-c-text-2'}`}
+          >
+            <span className="font-normal text-c-text-3">{index + 1}</span>
+            <span className="min-w-0 truncate">{option.label}</span>
+          </button>
+        ))}
+        <input
+          value={instead}
+          onChange={(event) => setInstead(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && instead.trim()) { event.preventDefault(); onDeny(instead.trim()); }
+            if (event.key === 'Escape') { event.preventDefault(); onDeny(); }
+          }}
+          disabled={isSubmitting}
+          placeholder="Tell Claude what to do instead"
+          className="block h-[30px] w-full rounded-[4px] border border-c-card-border bg-transparent px-2 text-[13px] text-c-text outline-none placeholder:text-c-text-3 focus:border-c-input-border"
+        />
+      </div>
+      <p className="mt-[6px] px-[2px] text-[11px] text-c-text-3">{isSubmitting ? 'Sending your answer…' : 'Esc to cancel'}</p>
     </div>
   );
 }

@@ -6,6 +6,8 @@ type UiPreferences = {
   sendByCtrlEnter: boolean;
   sidebarVisible: boolean;
   voiceEnabled: boolean;
+  /** Claude desktop right panel (Environment / Context / Outputs), toggled from the conversation header. */
+  sidePanelVisible: boolean;
 };
 
 type UiPreferenceKey = keyof UiPreferences;
@@ -37,6 +39,7 @@ const DEFAULTS: UiPreferences = {
   sendByCtrlEnter: false,
   sidebarVisible: true,
   voiceEnabled: false,
+  sidePanelVisible: true,
 };
 
 const PREFERENCE_KEYS = Object.keys(DEFAULTS) as UiPreferenceKey[];

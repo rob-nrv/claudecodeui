@@ -1,7 +1,6 @@
 import { memo, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import LLMProviderLogo from '../../../llm-provider-logo/LLMProviderLogo';
 import type {
   ChatMessage,
   ClaudePermissionSuggestion,
@@ -84,54 +83,48 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     return null;
   }
 
+  // Claude desktop vertical rhythm (measured): 50px before a user turn, 32px
+  // from a user turn to the reply, 14px between blocks of the same reply.
+  const spacingClass = !prevMessage
+    ? 'mt-0'
+    : message.type === 'user'
+      ? 'mt-[50px]'
+      : prevMessage.type === 'user'
+        ? 'mt-[32px]'
+        : 'mt-[14px]';
+
   return (
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
-      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
+      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${spacingClass} ${message.type === 'user' ? 'flex justify-end' : ''}`}
     >
       {message.type === 'user' ? (
-        /* User turn on the right: claude.ai-style attachment cards above the bubble */
-        <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
-            {message.images && message.images.length > 0 && (
-              <ChatMessageImages
-                images={message.images}
-                projectId={selectedProject?.projectId}
-              />
-            )}
-            {message.files && message.files.length > 0 && (
-              <ChatMessageFiles files={message.files} />
-            )}
-            {userCopyContent.trim().length > 0 || (!message.images?.length && !message.files?.length) ? (
-              <div className="group max-w-full rounded-2xl rounded-br-md border border-border/60 bg-muted/60 px-3 py-2 text-foreground shadow-sm dark:bg-gray-800/60 sm:px-4">
-                <div dir="auto" className="break-words font-serif text-sm">
-                  <Markdown
-                    breaks
-                    className="prose prose-sm max-w-none font-serif dark:prose-invert"
-                  >
-                    {message.content}
-                  </Markdown>
-                </div>
-                <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
-                  {shouldShowUserCopyControl && (
-                    <MessageCopyControl content={userCopyContent} messageType="user" />
-                  )}
-                  <span>{formattedTime}</span>
-                </div>
+        /* User turn on the right: a #212121 bubble, radius 10, 8/12 padding, plain text */
+        <div className="group/user relative flex max-w-[83%] flex-col items-end gap-2">
+          {message.images && message.images.length > 0 && (
+            <ChatMessageImages
+              images={message.images}
+              projectId={selectedProject?.projectId}
+            />
+          )}
+          {message.files && message.files.length > 0 && (
+            <ChatMessageFiles files={message.files} />
+          )}
+          {userCopyContent.trim().length > 0 && (
+            <div className="max-w-full rounded-[10px] bg-c-surface px-3 py-2 text-[14px] leading-5 text-c-text">
+              <div dir="auto" className="whitespace-pre-wrap break-words">
+                {message.content}
               </div>
-            ) : (
-              /* Attachment-only turn: no text bubble, but the timestamp still shows */
-              <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
-                <span>{formattedTime}</span>
-              </div>
-            )}
-          </div>
-          {!isGrouped && (
-            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm text-white sm:flex">
-              U
             </div>
           )}
+          {/* Actions appear on hover below the bubble without taking layout space. */}
+          <div className="pointer-events-none absolute right-0 top-full flex items-center gap-1 pt-1 text-[12px] text-c-text-3 opacity-0 transition-opacity group-hover/user:pointer-events-auto group-hover/user:opacity-100">
+            <span>{formattedTime}</span>
+            {shouldShowUserCopyControl && (
+              <MessageCopyControl content={userCopyContent} messageType="user" />
+            )}
+          </div>
         </div>
       ) : message.isTaskNotification ? (
         /* Compact task notification on the left */
@@ -142,37 +135,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
           </div>
         </div>
       ) : (
-        /* Claude/Error/Tool messages on the left */
-        <div className="w-full">
-          {!isGrouped && (
-            <div className="mb-2 flex items-center space-x-3">
-              {message.type === 'error' ? (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-red-600 text-sm text-white">
-                  !
-                </div>
-              ) : message.type === 'tool' ? (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-600 text-sm text-white dark:bg-gray-700">
-                  🔧
-                </div>
-              ) : (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full p-1 text-sm text-foreground">
-                  <LLMProviderLogo provider={provider} className="h-full w-full" />
-                </div>
-              )}
-              <div className="text-sm font-medium text-gray-900 dark:text-white">
-                {message.type === 'error'
-                  ? t('messageTypes.error')
-                  : message.type === 'tool'
-                    ? t('messageTypes.tool')
-                    : (provider === 'cursor'
-                        ? t('messageTypes.cursor')
-                        : provider === 'codex'
-                          ? t('messageTypes.codex')
-                          : provider === 'opencode'
-                              ? t('messageTypes.opencode', { defaultValue: 'OpenCode' })
-                              : t('messageTypes.claude'))}
-              </div>
-            </div>
+        /* Claude/Error/Tool messages on the left: no avatar or name row (Claude desktop) */
+        <div className="group/assistant relative w-full">
+          {message.type === 'error' && !isGrouped && (
+            <div className="mb-1 text-[12px] font-medium text-red-400">{t('messageTypes.error')}</div>
           )}
 
           <div className="w-full">
@@ -326,7 +292,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 </ReasoningContent>
               </Reasoning>
             ) : (
-              <div dir="auto" className="text-sm text-gray-700 dark:text-gray-300">
+              <div dir="auto" className="text-[14px] leading-5 text-c-text">
                 {/* Reasoning accordion */}
                 {showThinking && message.reasoning && (
                   <Reasoning className="mb-3" defaultOpen={false}>
@@ -374,7 +340,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
 
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
-                    <Markdown className="prose prose-sm prose-gray max-w-none font-serif dark:prose-invert">
+                    <Markdown className="claude-prose max-w-none">
                       {content}
                     </Markdown>
                   ) : (
@@ -386,15 +352,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               </div>
             )}
 
-            {(shouldShowAssistantCopyControl || !isGrouped) && (
-              <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
-                {shouldShowAssistantCopyControl && (
-                  <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
-                )}
-                {shouldShowAssistantCopyControl && (
-                  <MessageSpeakControl content={assistantCopyContent} />
-                )}
-                {!isGrouped && <span>{formattedTime}</span>}
+            {shouldShowAssistantCopyControl && (
+              /* Hover actions below the block, out of the layout flow (Claude desktop shows none at rest). */
+              <div className="pointer-events-none absolute left-0 top-full z-10 flex items-center gap-2 pt-0.5 text-[12px] text-c-text-3 opacity-0 transition-opacity group-hover/assistant:pointer-events-auto group-hover/assistant:opacity-100">
+                <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                <MessageSpeakControl content={assistantCopyContent} />
+                <span>{formattedTime}</span>
               </div>
             )}
           </div>

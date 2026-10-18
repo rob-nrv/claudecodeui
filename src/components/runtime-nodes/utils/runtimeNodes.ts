@@ -126,6 +126,20 @@ export type RuntimeNodeStatusDisplay = {
   emphasis: 'positive' | 'warning' | 'muted';
 };
 
+/** English defaults for each status key (`runtimeNode.status.<key>`). */
+export const RUNTIME_NODE_STATUS_DEFAULTS: Record<RuntimeNodeStatusDisplay['key'], string> = {
+  available: 'Available',
+  claudeUnavailable: 'Claude CLI not found',
+  notResponding: 'Status out of date',
+  unknown: 'Status not checked yet',
+  offline: 'Offline',
+  checking: 'Checking…',
+  conflict: 'Credential in use elsewhere',
+  incompatible: 'Needs update',
+  revoked: 'Revoked',
+  neverConnected: 'Never connected',
+};
+
 /** Why a new session cannot be created on the current target. */
 export type RunTargetBlock =
   | 'choose_node'

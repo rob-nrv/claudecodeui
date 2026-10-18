@@ -13,6 +13,7 @@ import {
   selectableRuntimeNodes,
   WORKSPACE_STATE_DEFAULTS,
   type RunTargetResolution,
+  RUNTIME_NODE_STATUS_DEFAULTS,
   type RuntimeNodeStatusDisplay,
   type RuntimeNodesListing,
 } from '../utils/runtimeNodes';
@@ -37,18 +38,7 @@ const EMPHASIS_CLASS: Record<RuntimeNodeStatusDisplay['emphasis'], string> = {
   muted: 'text-muted-foreground',
 };
 
-const STATUS_DEFAULTS: Record<RuntimeNodeStatusDisplay['key'], string> = {
-  available: 'Available',
-  claudeUnavailable: 'Claude CLI not found',
-  notResponding: 'Status out of date',
-  unknown: 'Status not checked yet',
-  offline: 'Offline',
-  checking: 'Checking…',
-  conflict: 'Credential in use elsewhere',
-  incompatible: 'Needs update',
-  revoked: 'Revoked',
-  neverConnected: 'Never connected',
-};
+const STATUS_DEFAULTS = RUNTIME_NODE_STATUS_DEFAULTS;
 
 /**
  * Compact runtime target choice on the new-session surface (FT-M08). With a

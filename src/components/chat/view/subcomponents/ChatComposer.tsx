@@ -10,7 +10,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon, ZapIcon } from 'lucide-react';
+import { Loader2, ArrowUpIcon, ZapIcon, PlusIcon, CircleStopIcon, CornerDownLeftIcon } from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
@@ -25,18 +25,13 @@ import {
   PromptInputHeader,
   PromptInputBody,
   PromptInputTextarea,
-  PromptInputFooter,
-  PromptInputTools,
-  PromptInputButton,
-  PromptInputSubmit,
 } from '../../../../shared/view/ui';
 
 import CommandMenu from './CommandMenu';
-import ActivityIndicator from './ActivityIndicator';
 import ComposerAttachment from './ComposerAttachment';
 import VoiceInputButton from './VoiceInputButton';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
-import TokenUsageSummary from './TokenUsageSummary';
+import ContextRing from './TokenUsageSummary';
 import QueuedMessageCard from './QueuedMessageCard';
 import ComposerModelMenu from './ComposerModelMenu';
 import ComposerPermissionMenu from './ComposerPermissionMenu';
@@ -124,6 +119,8 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  /** Usage-limit notice shown right above the box (Claude desktop). */
+  usageBanner?: ReactNode;
 }
 
 export default function ChatComposer({
@@ -131,7 +128,6 @@ export default function ChatComposer({
   handlePermissionDecision,
   handleGrantToolPermission,
   handlePermissionDismiss,
-  activity,
   isLoading,
   onAbortSession,
   onSteerNow,
@@ -148,10 +144,6 @@ export default function ChatComposer({
   modelsLoading,
   tokenBudget,
   onShowTokenUsage,
-  slashCommandsCount,
-  onToggleCommandMenu,
-  hasInput,
-  onClearInput,
   onSubmit,
   isDragActive,
   queuedDraft,
@@ -185,11 +177,11 @@ export default function ChatComposer({
   onTextareaPaste,
   onTextareaScrollSync,
   onTextareaInput,
-  isInputFocused = false,
   onInputFocusChange,
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  usageBanner,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const fileDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -251,11 +243,6 @@ export default function ChatComposer({
     (r) => r.toolName === 'AskUserQuestion' && isOpenPermissionRequest(r)
   );
 
-  // Hide the thinking/status bar while any permission request is still open
-  // (settled notices such as an expiry don't block the run).
-  const hasPendingPermissions = pendingPermissionRequests.some(isOpenPermissionRequest);
-  const hasActivityIndicator = Boolean(activity && !hasPendingPermissions);
-
   const hasQueuedDraft = Boolean(queuedDraft);
   const canQueueDraft = isLoading && Boolean(input.trim() || attachedFiles.length > 0);
 
@@ -314,8 +301,6 @@ export default function ChatComposer({
     : sendByCtrlEnter
       ? t('input.hintText.ctrlEnter')
       : t('input.hintText.enter');
-  // Hints are "•"-separated phrases in every locale; splitting lets the footer drop whole phrases.
-  const submitHintSegments = submitHint.split('•').map((segment) => segment.trim()).filter(Boolean);
   const submitAriaLabel = canQueueDraft
     ? hasQueuedDraft
       ? t('input.queue.update', { defaultValue: 'Update queued message' })
@@ -325,15 +310,11 @@ export default function ChatComposer({
       : t('input.send');
 
   return (
-    <div className="chat-composer-shell relative flex-shrink-0 px-2 pb-2 pt-0 sm:px-4 sm:pb-4 md:px-4 md:pb-6">
-      {!hasPendingPermissions && (
-        <div className="pointer-events-none absolute bottom-full left-1/2 z-10 w-[calc(100%-1rem)] max-w-[54.25rem] -translate-x-1/2 translate-y-px bg-transparent sm:w-[calc(100%-2rem)]">
-          <ActivityIndicator activity={activity} onAbort={onAbortSession} isInputFocused={isInputFocused} />
-        </div>
-      )}
-
+    <div className="chat-composer-shell relative flex-shrink-0 pb-safe-area-inset-bottom pt-0">
+      {/* The run line ("•• 2m 3s · Thinking") is rendered at the end of the
+          conversation by ChatInterface, as in Claude desktop. */}
       {pendingPermissionRequests.length > 0 && (
-        <div className="mx-auto mb-3 max-w-[54.25rem]">
+        <div className="claude-box mb-3">
           <PermissionRequestsBanner
             pendingPermissionRequests={pendingPermissionRequests}
             handlePermissionDecision={handlePermissionDecision}
@@ -354,7 +335,7 @@ export default function ChatComposer({
         />
       )}
 
-      {!hasQuestionPanel && <div className="relative mx-auto max-w-[54.25rem]">
+      {!hasQuestionPanel && <div className="claude-box relative">
         {showFileDropdown && filteredFiles.length > 0 && (
           <div
             ref={fileDropdownRef}
@@ -396,12 +377,16 @@ export default function ChatComposer({
           frequentCommands={frequentCommands}
         />
 
+        {usageBanner}
+
+        {/* Claude desktop composer: 559×44 box, 1px #373736 border, radius 12,
+            "+" at left, stop/send and mic at right; mode and model below. */}
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
           status={isLoading ? 'streaming' : 'ready'}
           className={[
+            'rounded-[12px] border-c-input-border bg-c-input shadow-none backdrop-blur-none focus-within:border-c-input-border focus-within:shadow-none focus-within:ring-0',
             isTextareaExpanded ? 'chat-input-expanded' : '',
-            hasActivityIndicator ? 'rounded-t-none' : '',
           ].filter(Boolean).join(' ')}
           {...getRootProps()}
         >
@@ -440,166 +425,141 @@ export default function ChatComposer({
           )}
 
           <input {...getInputProps()} />
+          <span id="chat-composer-hint" className="sr-only">{submitHint}</span>
 
-          <PromptInputBody>
-            <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">
-              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words px-4 py-2 text-sm leading-6 text-transparent">
-                {renderInputWithMentions(input)}
-              </div>
-            </div>
-
-            <PromptInputTextarea
-              ref={textareaRef}
-              dir="auto"
-              value={input}
-              onChange={onInputChange}
-              onClick={onTextareaClick}
-              onKeyDown={onTextareaKeyDown}
-              onPaste={onTextareaPaste}
-              onScroll={(event) => onTextareaScrollSync(event.target as HTMLTextAreaElement)}
-              onFocus={() => onInputFocusChange?.(true)}
-              onBlur={() => onInputFocusChange?.(false)}
-              onInput={onTextareaInput}
-              placeholder={placeholder}
-            />
-        </PromptInputBody>
-
-        {/* Tools and actions never shrink below their controls (a shrinking tools row used
-            to spill its buttons under the actions); when both cannot fit, the actions wrap. */}
-        <PromptInputFooter className="flex-wrap gap-y-2">
-          <PromptInputTools className="shrink-0">
-            <PromptInputButton
-              tooltip={{ content: t('input.attachFiles') }}
+          <div className="flex items-end">
+            <button
+              type="button"
               onClick={openAttachmentPicker}
               aria-label={t('input.attachFiles')}
+              title={t('input.attachFiles')}
+              className="mb-[7px] ml-[8px] flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-c-text-2 hover:bg-c-active hover:text-c-text"
             >
-              <PaperclipIcon />
-            </PromptInputButton>
+              <PlusIcon className="h-[15px] w-[15px]" strokeWidth={1.8} />
+            </button>
 
-            {onVoiceTranscript && voiceAvailable && (
-              <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
-            )}
+            <PromptInputBody className="min-w-0 flex-1">
+              <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+                <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words py-[11px] pl-[5px] pr-2 text-[14px] leading-5 text-transparent">
+                  {renderInputWithMentions(input)}
+                </div>
+              </div>
 
-            <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
+              <PromptInputTextarea
+                ref={textareaRef}
+                dir="auto"
+                value={input}
+                onChange={onInputChange}
+                onClick={onTextareaClick}
+                onKeyDown={onTextareaKeyDown}
+                onPaste={onTextareaPaste}
+                onScroll={(event) => onTextareaScrollSync(event.target as HTMLTextAreaElement)}
+                onFocus={() => onInputFocusChange?.(true)}
+                onBlur={() => onInputFocusChange?.(false)}
+                onInput={onTextareaInput}
+                placeholder={placeholder}
+                aria-describedby="chat-composer-hint"
+                rows={1}
+                className="min-h-[42px] py-[11px] pl-[5px] pr-2 text-[14px] leading-5 text-c-text placeholder:text-c-text-3"
+              />
+            </PromptInputBody>
 
-            <PromptInputButton
-              tooltip={{ content: t('input.showAllCommands') }}
-              onClick={onToggleCommandMenu}
-              className="relative"
-            >
-              <MessageSquareIcon />
-              {slashCommandsCount > 0 && (
-                <span
-                  className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-0.5 text-[10px] font-bold text-primary-foreground"
+            <div data-slot="composer-actions" className="mb-[7px] mr-[10px] flex flex-shrink-0 items-center gap-[7px]">
+              {canQueueDraft && (
+                <button
+                  type="button"
+                  onClick={handleSteerButtonClick}
+                  disabled={steerState === 'sending'}
+                  aria-label={steerTooltip}
+                  title={steerTooltip}
+                  className={[
+                    'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
+                    steerState === 'armed'
+                      ? 'bg-amber-500/15 text-amber-400'
+                      : steerState === 'error'
+                        ? 'text-red-400'
+                        : 'text-c-text-2 hover:bg-c-active hover:text-c-text',
+                  ].join(' ')}
                 >
-                  {slashCommandsCount}
-                </span>
+                  {steerState === 'sending' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ZapIcon className="h-4 w-4" strokeWidth={1.8} />}
+                </button>
               )}
-            </PromptInputButton>
 
-            {hasInput && (
-              <PromptInputButton
-                tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
-                onClick={onClearInput}
-                className="hidden sm:flex"
-              >
-                <XIcon />
-              </PromptInputButton>
-            )}
-
-          </PromptInputTools>
-
-          {/* A single clipped line: hint phrases that do not fit wrap out of view whole,
-              so the hint only ever uses the room the controls leave. */}
-          <div
-            data-slot="composer-hint"
-            title={submitHint}
-            className={`mx-2 hidden h-4 min-w-0 flex-1 basis-0 flex-wrap justify-end gap-x-1 overflow-hidden text-xs leading-4 text-muted-foreground/50 transition-opacity duration-200 lg:flex ${
-              input.trim() && !canQueueDraft ? 'opacity-0' : 'opacity-100'
-            }`}
-          >
-            {submitHintSegments.map((segment, index) => (
-              <span key={segment} className="max-w-full truncate">
-                {index > 0 ? `• ${segment}` : segment}
-              </span>
-            ))}
-          </div>
-
-          <div data-slot="composer-actions" className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <ComposerModelMenu
-              effort={effort}
-              effortOptions={availableEffortOptions}
-              onSelectEffort={onSelectEffort}
-              model={model}
-              modelOptions={availableModelOptions}
-              onSelectModel={onSelectModel}
-              modelsLoading={modelsLoading}
-            />
-
-            <ComposerPermissionMenu
-              permissionMode={permissionMode}
-              permissionModes={availablePermissionModes}
-              onSelectPermissionMode={onSelectPermissionMode}
-              providerLabel={providerLabel}
-            />
-
-            {canQueueDraft && (
-              <PromptInputButton
-                onClick={handleSteerButtonClick}
-                disabled={steerState === 'sending'}
-                tooltip={{ content: steerTooltip }}
-                aria-label={steerTooltip}
-                title={steerTooltip}
-                className={
-                  steerState === 'armed'
-                    ? 'h-10 w-10 border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 sm:h-10 sm:w-10'
-                    : steerState === 'error'
-                      ? 'h-10 w-10 border border-red-500/30 text-red-600 dark:text-red-400 sm:h-10 sm:w-10'
-                      : 'h-10 w-10 sm:h-10 sm:w-10'
+              <button
+                type={isLoading || isRecording || canQueueDraft ? 'button' : 'submit'}
+                onClick={
+                  canQueueDraft
+                    ? (e: MouseEvent<HTMLButtonElement>) => {
+                        e.preventDefault();
+                        onSubmit(e);
+                      }
+                    : isLoading
+                      ? onAbortSession
+                      : isRecording
+                        ? (e: MouseEvent<HTMLButtonElement>) => {
+                            e.preventDefault();
+                            voiceStop({ send: true });
+                          }
+                        : undefined
                 }
-              >
-                {steerState === 'sending' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ZapIcon className="h-4 w-4" />}
-              </PromptInputButton>
-            )}
-
-            <PromptInputSubmit
-              onClick={
-                canQueueDraft
-                  ? (e: MouseEvent<HTMLButtonElement>) => {
-                      e.preventDefault();
-                      onSubmit(e);
-                    }
-                  : isLoading
-                    ? onAbortSession
-                    : isRecording
-                      ? (e: MouseEvent<HTMLButtonElement>) => {
-                          e.preventDefault();
-                          voiceStop({ send: true });
-                        }
-                      : undefined
-              }
-              disabled={
-                isLoading
-                  ? false
-                  : isRecording
+                disabled={
+                  isLoading
                     ? false
-                    : isTranscribing
-                      ? true
-                      : !input.trim() && attachedFiles.length === 0
-              }
-              aria-label={submitAriaLabel}
-              title={submitAriaLabel}
-              className="h-10 w-10 sm:h-10 sm:w-10"
-            >
-              {isTranscribing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : canQueueDraft ? (
-                <ArrowUpIcon className="h-4 w-4" />
-              ) : undefined}
-            </PromptInputSubmit>
+                    : isRecording
+                      ? false
+                      : isTranscribing
+                        ? true
+                        : !input.trim() && attachedFiles.length === 0
+                }
+                aria-label={submitAriaLabel}
+                title={submitAriaLabel}
+                className={[
+                  'flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-default',
+                  isLoading && !canQueueDraft
+                    ? 'text-c-text hover:bg-c-active'
+                    : input.trim() || attachedFiles.length > 0 || isRecording
+                      ? 'text-c-text-2 hover:bg-c-active hover:text-c-text'
+                      : 'text-c-text-3',
+                ].join(' ')}
+              >
+                {isTranscribing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : isLoading && !canQueueDraft ? (
+                  <CircleStopIcon className="h-4 w-4" strokeWidth={1.8} />
+                ) : canQueueDraft ? (
+                  <ArrowUpIcon className="h-4 w-4" strokeWidth={2} />
+                ) : (
+                  <CornerDownLeftIcon className="h-4 w-4" strokeWidth={1.8} />
+                )}
+              </button>
+
+              {onVoiceTranscript && voiceAvailable && (
+                <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
+              )}
+            </div>
           </div>
-        </PromptInputFooter>
       </PromptInput>
+
+      {/* Mode left, model / effort / context ring right (Claude desktop row under the box). */}
+      <div className="flex h-[44px] items-center gap-2 pl-[12px] pr-[11px] text-[14px] text-c-text-2">
+        <ComposerPermissionMenu
+          permissionMode={permissionMode}
+          permissionModes={availablePermissionModes}
+          onSelectPermissionMode={onSelectPermissionMode}
+          providerLabel={providerLabel}
+        />
+        <div className="flex-1" />
+        <ComposerModelMenu
+          effort={effort}
+          effortOptions={availableEffortOptions}
+          onSelectEffort={onSelectEffort}
+          model={model}
+          modelOptions={availableModelOptions}
+          onSelectModel={onSelectModel}
+          modelsLoading={modelsLoading}
+        />
+        <ContextRing usage={tokenBudget} onClick={onShowTokenUsage} />
+      </div>
       </div>}
     </div>
   );

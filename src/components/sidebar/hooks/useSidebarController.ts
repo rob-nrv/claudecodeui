@@ -138,7 +138,13 @@ export function useSidebarController({
   sidebarVisible,
 }: UseSidebarControllerArgs) {
   const paletteOps = usePaletteOps();
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  // Claude desktop lists every project group open; the user collapses groups
+  // individually. Track the collapsed ones and derive the expanded set.
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const expandedProjects = useMemo(
+    () => new Set(projects.map((project) => project.projectId).filter((id) => !collapsedProjects.has(id))),
+    [projects, collapsedProjects],
+  );
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingName, setEditingName] = useState('');
@@ -214,12 +220,12 @@ export function useSidebarController({
       return;
     }
 
-    setExpandedProjects((prev) => {
-      if (prev.has(selectedProjectId)) {
+    setCollapsedProjects((prev) => {
+      if (!prev.has(selectedProjectId)) {
         return prev;
       }
       const next = new Set(prev);
-      next.add(selectedProjectId);
+      next.delete(selectedProjectId);
       return next;
     });
   }, [selectedProject?.projectId]);
@@ -577,9 +583,11 @@ export function useSidebarController({
   // All sidebar state keys (expanded, starred, loading, etc.) use the DB
   // `projectId` as their identifier after the migration.
   const toggleProject = useCallback((projectId: string) => {
-    setExpandedProjects((prev) => {
-      const next = new Set<string>();
-      if (!prev.has(projectId)) {
+    setCollapsedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
         next.add(projectId);
       }
       return next;

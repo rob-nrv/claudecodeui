@@ -8,6 +8,11 @@ interface QueuedMessageCardProps {
   onDelete: () => void;
 }
 
+/*
+ * Claude desktop queued message (reference C2, 2026-07-28): one rounded row
+ * above the composer — "1 queued message" in bold, the message in muted text,
+ * then its actions.
+ */
 export default function QueuedMessageCard({
   content,
   attachmentCount = 0,
@@ -17,45 +22,33 @@ export default function QueuedMessageCard({
   const { t } = useTranslation('chat');
 
   return (
-    <div className="settings-content-enter mx-auto mb-2 max-w-[54.25rem] rounded-xl rounded-t-none border border-dashed border-primary/25 bg-primary/[0.04] px-3 py-2">
-      <div className="flex items-start gap-2.5">
-        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60" aria-hidden />
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-primary/70">
-            <span>{t('input.queue.label', { defaultValue: 'Queued' })}</span>
-            <span className="normal-case text-muted-foreground/60">
-              · {t('input.queue.willSend', { defaultValue: 'Will send when this finishes' })}
-            </span>
-          </div>
-          <p className="mt-0.5 line-clamp-2 break-words text-sm text-foreground/90">{content}</p>
-          {attachmentCount > 0 && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {attachmentCount} {attachmentCount === 1 ? 'file' : 'files'} attached
-            </p>
-          )}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-0.5">
-          <button
-            type="button"
-            onClick={onEdit}
-            aria-label={t('input.queue.edit', { defaultValue: 'Edit queued message' })}
-            title={t('input.queue.edit', { defaultValue: 'Edit queued message' })}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <PencilIcon className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            aria-label={t('input.queue.delete', { defaultValue: 'Delete queued message' })}
-            title={t('input.queue.delete', { defaultValue: 'Delete queued message' })}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-          >
-            <XIcon className="h-3.5 w-3.5" />
-          </button>
-        </div>
+    <div className="claude-box settings-content-enter mb-[6px]">
+      <div className="flex min-h-[38px] items-center gap-2 rounded-[10px] bg-c-surface py-[7px] pl-3 pr-[6px] text-[14px] leading-5">
+        <span className="flex-shrink-0 font-semibold text-c-text">
+          {t('input.queue.oneQueued', { defaultValue: '1 queued message' })}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-c-text-3" title={content}>
+          {content}
+          {attachmentCount > 0 && ` · ${attachmentCount} ${attachmentCount === 1 ? 'file' : 'files'}`}
+        </span>
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label={t('input.queue.edit', { defaultValue: 'Edit queued message' })}
+          title={t('input.queue.edit', { defaultValue: 'Edit queued message' })}
+          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-c-text-3 hover:bg-c-active hover:text-c-text"
+        >
+          <PencilIcon className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={t('input.queue.delete', { defaultValue: 'Delete queued message' })}
+          title={t('input.queue.delete', { defaultValue: 'Delete queued message' })}
+          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-c-text-3 hover:bg-c-active hover:text-c-text"
+        >
+          <XIcon className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );

@@ -1,11 +1,12 @@
-import { MessageSquare, Terminal, Folder, GitBranch, ClipboardCheck, MonitorPlay, type LucideIcon } from 'lucide-react';
-import { Fragment } from 'react';
-import type { Dispatch, KeyboardEvent, SetStateAction } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { ClipboardCheck, EllipsisVertical, Folder, Globe, MessageSquare, SquareTerminal, type LucideIcon } from 'lucide-react';
+import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Tooltip, PillBar, Pill } from '../../../../shared/view/ui';
+import { cn } from '../../../../lib/utils';
 import type { AppTab } from '../../../../types/app';
 import { usePlugins } from '../../../../contexts/PluginsContext';
+import { useUiPreferences } from '../../../../hooks/useUiPreferences';
 import PluginIcon from '../../../plugins/view/PluginIcon';
 
 type MainContentTabSwitcherProps = {
@@ -15,44 +16,38 @@ type MainContentTabSwitcherProps = {
   shouldShowBrowserTab: boolean;
 };
 
-type BuiltInTab = {
-  kind: 'builtin';
-  id: AppTab;
-  labelKey: string;
-  icon: LucideIcon;
-};
+const actionButton =
+  'flex h-[26px] w-7 items-center justify-center rounded-[6px] text-c-text-2 transition-colors hover:bg-c-hover hover:text-c-text';
+const activeAction = 'bg-[#383838] text-c-text hover:bg-[#383838]';
 
-type PluginTab = {
-  kind: 'plugin';
-  id: AppTab;
-  label: string;
-  pluginName: string;
-  iconFile: string;
-};
+/** Claude desktop "changes" glyph: a framed plus over minus. */
+function ChangesIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="14" height="15" viewBox="0 0 14 15" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
+      <rect x="0.65" y="0.65" width="12.7" height="13.7" rx="1.8" />
+      <path d="M7 3.6V7.8M4.9 5.7H9.1M4.9 10.7H9.1" />
+    </svg>
+  );
+}
 
-type TabDefinition = BuiltInTab | PluginTab;
+/** Claude desktop side-panel toggle: a window with a list column. */
+function SidePanelIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="16" height="13" viewBox="0 0 16 13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
+      <rect x="0.65" y="0.65" width="14.7" height="11.7" rx="1.8" />
+      <path d="M3.4 4.2H5M3.4 6.5H5M3.4 8.8H5M7 4.2H12.4M7 6.5H12.4M7 8.8H12.4" />
+    </svg>
+  );
+}
 
-const BASE_TABS: BuiltInTab[] = [
-  { kind: 'builtin', id: 'chat',  labelKey: 'tabs.chat',  icon: MessageSquare },
-  { kind: 'builtin', id: 'shell', labelKey: 'tabs.shell', icon: Terminal },
-  { kind: 'builtin', id: 'files', labelKey: 'tabs.files', icon: Folder },
-  { kind: 'builtin', id: 'git',   labelKey: 'tabs.git',   icon: GitBranch },
-];
+type ViewAction = { id: AppTab; labelKey: string; fallback: string; icon: LucideIcon | typeof ChangesIcon };
 
-const BROWSER_TAB: BuiltInTab = {
-  kind: 'builtin',
-  id: 'browser',
-  labelKey: 'tabs.browser',
-  icon: MonitorPlay,
-};
-
-const TASKS_TAB: BuiltInTab = {
-  kind: 'builtin',
-  id: 'tasks',
-  labelKey: 'tabs.tasks',
-  icon: ClipboardCheck,
-};
-
+/*
+ * Claude desktop conversation header, right side (measured on the live app,
+ * 2026-10-18): side-panel toggle, a hairline, then terminal, changes,
+ * browser, files and a ⋮ menu — 28 px buttons on a 30 px pitch. Each view
+ * opens in the pane beside the conversation; clicking the active one closes it.
+ */
 export default function MainContentTabSwitcher({
   activeTab,
   setActiveTab,
@@ -61,87 +56,111 @@ export default function MainContentTabSwitcher({
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
+  const { preferences, setPreference } = useUiPreferences();
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
 
-  const builtInTabs: BuiltInTab[] = [
-    ...BASE_TABS,
-    ...(shouldShowBrowserTab ? [BROWSER_TAB] : []),
-    ...(shouldShowTasksTab ? [TASKS_TAB] : []),
+  useEffect(() => {
+    if (!isMoreOpen) return undefined;
+    const close = (event: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(event.target as Node)) setIsMoreOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [isMoreOpen]);
+
+  const views: ViewAction[] = [
+    { id: 'shell', labelKey: 'tabs.shell', fallback: 'Terminal', icon: SquareTerminal },
+    { id: 'git', labelKey: 'tabs.git', fallback: 'Changes', icon: ChangesIcon },
+    ...(shouldShowBrowserTab ? [{ id: 'browser' as AppTab, labelKey: 'tabs.browser', fallback: 'Browser', icon: Globe }] : []),
+    { id: 'files', labelKey: 'tabs.files', fallback: 'Files', icon: Folder },
+  ];
+  const overflow = [
+    ...(shouldShowTasksTab ? [{ id: 'tasks' as AppTab, label: t('tabs.tasks'), icon: <ClipboardCheck className="h-4 w-4" strokeWidth={1.6} /> }] : []),
+    ...plugins.filter((plugin) => plugin.enabled).map((plugin) => ({
+      id: `plugin:${plugin.name}` as AppTab,
+      label: plugin.displayName,
+      icon: <PluginIcon pluginName={plugin.name} iconFile={plugin.icon} className="flex h-4 w-4 items-center justify-center [&>svg]:h-full [&>svg]:w-full" />,
+    })),
   ];
 
-  const pluginTabs: PluginTab[] = plugins
-    .filter((p) => p.enabled)
-    .map((p) => ({
-      kind: 'plugin',
-      id: `plugin:${p.name}` as AppTab,
-      label: p.displayName,
-      pluginName: p.name,
-      iconFile: p.icon,
-    }));
-
-  const tabs: TabDefinition[] = [...builtInTabs, ...pluginTabs];
-
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const tabList = event.currentTarget.closest('[role="tablist"]');
-    if (!tabList) return;
-
-    const tabButtons = Array.from(tabList.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-    const currentIndex = tabButtons.indexOf(event.currentTarget);
-    let nextIndex: number;
-
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabButtons.length;
-    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabButtons.length) % tabButtons.length;
-    else if (event.key === 'Home') nextIndex = 0;
-    else if (event.key === 'End') nextIndex = tabButtons.length - 1;
-    else return;
-
-    event.preventDefault();
-    tabButtons[nextIndex]?.focus();
-    tabButtons[nextIndex]?.click();
-  };
+  const toggleView = (id: AppTab) => setActiveTab(activeTab === id ? 'chat' : id);
+  const panelLabel = t('mainContent.toggleSidePanel', { defaultValue: 'Toggle side panel' });
 
   return (
-    <PillBar
-      role="tablist"
-      aria-label={t('tabs.views', { defaultValue: 'Workspace views' })}
-      className="min-w-max border border-border/40 bg-muted/50 shadow-inner shadow-black/[0.025] dark:shadow-black/10"
-    >
-      {tabs.map((tab, index) => {
-        const isActive = tab.id === activeTab;
-        const displayLabel = tab.kind === 'builtin' ? t(tab.labelKey) : tab.label;
-
+    <div className="flex items-center gap-[2px]" role="toolbar" aria-label={t('tabs.views', { defaultValue: 'Workspace views' })}>
+      {activeTab === 'chat' && (
+        <>
+          <button
+            type="button"
+            onClick={() => setPreference('sidePanelVisible', !preferences.sidePanelVisible)}
+            aria-pressed={preferences.sidePanelVisible}
+            title={panelLabel}
+            aria-label={panelLabel}
+            className={cn(actionButton, 'w-[30px]', preferences.sidePanelVisible && activeAction)}
+          >
+            <SidePanelIcon />
+          </button>
+          <span aria-hidden="true" className="mx-[3px] h-[18px] w-px bg-[#383838]" />
+        </>
+      )}
+      {views.map((view) => {
+        const label = t(view.labelKey, { defaultValue: view.fallback });
+        const Icon = view.icon;
         return (
-          <Fragment key={`${tab.id}-${index}`}>
-            {index === builtInTabs.length && pluginTabs.length > 0 && (
-              <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
-            )}
-            <Tooltip content={displayLabel} position="bottom">
-              <Pill
-                role="tab"
-                aria-label={displayLabel}
-                aria-selected={isActive}
-                tabIndex={isActive ? 0 : -1}
-                isActive={isActive}
-                onClick={() => setActiveTab(tab.id)}
-                onKeyDown={handleTabKeyDown}
-                className="h-8 max-w-44 px-2.5 py-[5px]"
-              >
-                {tab.kind === 'builtin' ? (
-                  <tab.icon className="h-3.5 w-3.5 shrink-0" strokeWidth={isActive ? 2.2 : 1.8} />
-                ) : (
-                  <PluginIcon
-                    pluginName={tab.pluginName}
-                    iconFile={tab.iconFile}
-                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center [&>svg]:h-full [&>svg]:w-full"
-                  />
-                )}
-                <span className={`${isActive ? 'inline max-w-28' : 'hidden'} truncate sm:max-w-36 lg:inline`}>
-                  {displayLabel}
-                </span>
-              </Pill>
-            </Tooltip>
-          </Fragment>
+          <button
+            key={view.id}
+            type="button"
+            onClick={() => toggleView(view.id)}
+            aria-pressed={activeTab === view.id}
+            title={label}
+            aria-label={label}
+            className={cn(actionButton, activeTab === view.id && activeAction)}
+          >
+            <Icon className="h-[15px] w-[15px]" strokeWidth={1.6} />
+          </button>
         );
       })}
-    </PillBar>
+      <div ref={moreRef} className="relative">
+        <button
+          type="button"
+          onClick={() => setIsMoreOpen((open) => !open)}
+          aria-haspopup="menu"
+          aria-expanded={isMoreOpen}
+          title={t('mainContent.moreViews', { defaultValue: 'More' })}
+          aria-label={t('mainContent.moreViews', { defaultValue: 'More' })}
+          className={cn(actionButton, overflow.some((item) => item.id === activeTab) && activeAction)}
+        >
+          <EllipsisVertical className="h-[15px] w-[15px]" strokeWidth={1.8} />
+        </button>
+        {isMoreOpen && (
+          <div role="menu" className="absolute right-0 top-[30px] z-50 w-[220px] rounded-[10px] border border-c-card-border bg-c-surface p-1 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={activeTab === 'chat'}
+              onClick={() => { setActiveTab('chat'); setIsMoreOpen(false); }}
+              className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[14px] text-c-text-2 hover:bg-c-active hover:text-c-text"
+            >
+              <MessageSquare className="h-4 w-4" strokeWidth={1.6} />
+              {t('tabs.chat')}
+            </button>
+            {overflow.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={activeTab === item.id}
+                onClick={() => { setActiveTab(item.id); setIsMoreOpen(false); }}
+                className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[14px] text-c-text-2 hover:bg-c-active hover:text-c-text"
+              >
+                {item.icon}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

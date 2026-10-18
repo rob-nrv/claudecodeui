@@ -36,13 +36,13 @@ test('an expired approval renders as a settled notice with no approve or deny ac
   assert.match(markup, /Permission request expired/);
   assert.match(markup, /npm test/);
   assert.match(markup, /Dismiss/);
-  assert.doesNotMatch(markup, /Allow once|Deny/);
+  assert.doesNotMatch(markup, /Allow this bash command|Tell Claude what to do instead/);
 });
 
 test('a request that is no longer available renders without actions', () => {
   const markup = render([bash({ status: 'unavailable' })]);
   assert.match(markup, /no longer available/);
-  assert.doesNotMatch(markup, /Allow once/);
+  assert.doesNotMatch(markup, /Allow this bash command/);
 });
 
 test('a request whose answer is being sent keeps its actions disabled', () => {
@@ -53,7 +53,9 @@ test('a request whose answer is being sent keeps its actions disabled', () => {
 
 test('a pending request is answerable, and says so when the last answer was not sent', () => {
   const pending = render([bash({ status: 'pending' })]);
-  assert.match(pending, /Allow once/);
+  assert.match(pending, /Allow this bash command?/);
+  assert.match(pending, />Yes</);
+  assert.match(pending, />No</);
   assert.equal(disabledButtonCount(pending), 0);
 
   const notSent = render([bash({ status: 'pending', notice: 'not_sent' })]);

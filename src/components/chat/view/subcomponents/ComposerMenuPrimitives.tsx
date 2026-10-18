@@ -24,7 +24,7 @@ export function ComposerMenuSurface({
       ref={menuRef}
       role="menu"
       aria-label={ariaLabel}
-      className="fixed z-[100] min-w-48 overflow-y-auto overscroll-contain rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+      className="fixed z-[100] min-w-48 overflow-y-auto overscroll-contain rounded-[10px] border border-c-card-border bg-c-surface p-1 text-c-text shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
       style={{
         right: anchor.right,
         bottom: anchor.bottom,
@@ -39,12 +39,12 @@ export function ComposerMenuSurface({
 
 export function ComposerMenuHeading({ children }: { children: ReactNode }) {
   return (
-    <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">{children}</p>
+    <p className="px-2.5 pb-1 pt-1.5 text-[12px] text-c-text-3">{children}</p>
   );
 }
 
 export function ComposerMenuSeparator() {
-  return <div className="my-1 h-px bg-border" aria-hidden />;
+  return <div className="my-1 h-px bg-c-card-border" aria-hidden />;
 }
 
 export function ComposerMenuItem({

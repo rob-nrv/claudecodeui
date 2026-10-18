@@ -22,6 +22,8 @@ import { readRuntimeTargetChoice } from '../../runtime-nodes/utils/runtimeNodes'
 import { selectWorkspaceRuntimeTarget, setWorkspaceRuntimeTargetResolver } from '../../../utils/workspaceRuntimeTarget';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
+import MainViewPaneHeader from './subcomponents/MainViewPaneHeader';
+import { MAIN_VIEW_LABELS } from '../utils/viewLabels';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -65,6 +67,7 @@ function MainContent({
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
   const [browserUseEnabled, setBrowserUseEnabled] = useState(false);
+  const [isViewExpanded, setIsViewExpanded] = useState(false);
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
   const shouldShowBrowserTab = browserUseEnabled;
@@ -174,70 +177,95 @@ function MainContent({
     return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
+  // Claude desktop: Terminal, Changes, Browser, Files, Tasks and plugins open in
+  // a pane to the right of the conversation (reference B, 2026-07-31); the
+  // conversation stays visible on the left. On a phone the view takes the
+  // whole screen and its header closes it.
+  const isViewOpen = activeTab !== 'chat';
+  const viewLabel = MAIN_VIEW_LABELS[activeTab as keyof typeof MAIN_VIEW_LABELS] ?? activeTab.replace('plugin:', '');
+
   return (
-    <div className="flex h-full flex-col">
-      <MainContentHeader
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        selectedProject={selectedProject}
-        selectedSession={selectedSession}
-        shouldShowTasksTab={shouldShowTasksTab}
-        shouldShowBrowserTab={shouldShowBrowserTab}
-        isMobile={isMobile}
-        onMenuClick={onMenuClick}
-        sessionLineage={sessionLineage}
-        onNavigateToSession={navigateToSession}
-      />
+    <div className="flex h-full">
+      <div
+        className={[
+          'flex min-w-0 flex-col',
+          !isViewOpen ? 'flex-1' : isMobile || isViewExpanded ? 'hidden' : 'w-[clamp(380px,38%,560px)] flex-shrink-0',
+        ].join(' ')}
+      >
+        <MainContentHeader
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          selectedProject={selectedProject}
+          selectedSession={selectedSession}
+          shouldShowTasksTab={shouldShowTasksTab}
+          shouldShowBrowserTab={shouldShowBrowserTab}
+          isMobile={isMobile}
+          onMenuClick={onMenuClick}
+          sessionLineage={sessionLineage}
+          onNavigateToSession={navigateToSession}
+        />
+        <div className={'min-h-0 flex-1 overflow-hidden ' + (editorExpanded ? 'hidden' : '')}>
+          <ErrorBoundary showDetails>
+            <ChatInterface
+              isActive={!isViewOpen || !isMobile}
+              selectedProject={selectedProject}
+              selectedSession={selectedSession}
+              ws={ws}
+              sendMessage={sendMessage}
+              onFileOpen={handleFileOpen}
+              onInputFocusChange={onInputFocusChange}
+              onSessionProcessing={onSessionProcessing}
+              onSessionIdle={onSessionIdle}
+              processingSessions={processingSessions}
+              onNavigateToSession={onNavigateToSession}
+              onSessionEstablished={onSessionEstablished}
+              onShowSettings={onShowSettings}
+              showRawParameters={showRawParameters}
+              showThinking={showThinking}
+              sendByCtrlEnter={sendByCtrlEnter}
+              externalMessageUpdate={externalMessageUpdate}
+              newSessionTrigger={newSessionTrigger}
+              onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
+              sessionLineage={sessionLineage}
+            />
+          </ErrorBoundary>
+        </div>
+      </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
-          <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
-            <ErrorBoundary showDetails>
-              <ChatInterface
-                isActive={activeTab === 'chat'}
-                selectedProject={selectedProject}
-                selectedSession={selectedSession}
-                ws={ws}
-                sendMessage={sendMessage}
-                onFileOpen={handleFileOpen}
-                onInputFocusChange={onInputFocusChange}
-                onSessionProcessing={onSessionProcessing}
-                onSessionIdle={onSessionIdle}
-                processingSessions={processingSessions}
-                onNavigateToSession={onNavigateToSession}
-                onSessionEstablished={onSessionEstablished}
-                onShowSettings={onShowSettings}
-                showRawParameters={showRawParameters}
-                showThinking={showThinking}
-                sendByCtrlEnter={sendByCtrlEnter}
-                externalMessageUpdate={externalMessageUpdate}
-                newSessionTrigger={newSessionTrigger}
-                onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
-                sessionLineage={sessionLineage}
-              />
-            </ErrorBoundary>
-          </div>
-
-          {activeTab === 'files' && (
-            <div className="h-full overflow-hidden">
+      {isViewOpen && (
+        <section
+          aria-label={viewLabel}
+          className={'flex min-w-0 flex-1 flex-col bg-c-bg ' + (isMobile ? '' : 'border-l border-c-sidebar-border')}
+        >
+          <MainViewPaneHeader
+            label={viewLabel}
+            projectName={selectedProject.displayName}
+            isExpanded={isViewExpanded}
+            canExpand={!isMobile}
+            onToggleExpand={() => setIsViewExpanded((value) => !value)}
+            onClose={() => {
+              setIsViewExpanded(false);
+              setActiveTab('chat');
+            }}
+          />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {activeTab === 'files' && (
               <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
-            </div>
-          )}
+            )}
 
-          {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
-              <StandaloneShell
-                project={selectedProject}
-                session={selectedSession}
-                showHeader={false}
-                isActive={activeTab === 'shell'}
-                claudeProfileId={selectedSession?.claudeProfileId ?? null}
-              />
-            </div>
-          )}
+            {activeTab === 'shell' && (
+              <div className="h-full w-full overflow-hidden">
+                <StandaloneShell
+                  project={selectedProject}
+                  session={selectedSession}
+                  showHeader={false}
+                  isActive={activeTab === 'shell'}
+                  claudeProfileId={selectedSession?.claudeProfileId ?? null}
+                />
+              </div>
+            )}
 
-          {activeTab === 'git' && (
-            <div className="h-full overflow-hidden">
+            {activeTab === 'git' && (
               <GitPanel
                 selectedProject={selectedProject}
                 isMobile={isMobile}
@@ -245,42 +273,38 @@ function MainContent({
                 onProjectSelect={onProjectSelect}
                 onProjectsRefresh={onProjectsRefresh}
               />
-            </div>
-          )}
+            )}
 
-          {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
+            {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
 
-          {shouldShowBrowserTab && activeTab === 'browser' && (
-            <div className="h-full overflow-hidden">
+            {shouldShowBrowserTab && activeTab === 'browser' && (
               <BrowserUsePanel isVisible={activeTab === 'browser'} onShowSettings={onShowSettings} />
-            </div>
-          )}
+            )}
 
-          {activeTab.startsWith('plugin:') && (
-            <div className="h-full overflow-hidden">
+            {activeTab.startsWith('plugin:') && (
               <PluginTabContent
                 pluginName={activeTab.replace('plugin:', '')}
                 selectedProject={selectedProject}
                 selectedSession={selectedSession}
               />
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </section>
+      )}
 
-        <EditorSidebar
-          editingFile={editingFile}
-          isMobile={isMobile}
-          editorExpanded={editorExpanded}
-          editorWidth={editorWidth}
-          hasManualWidth={hasManualWidth}
-          resizeHandleRef={resizeHandleRef}
-          onResizeStart={handleResizeStart}
-          onCloseEditor={handleCloseEditor}
-          onToggleEditorExpand={handleToggleEditorExpand}
-          projectPath={selectedProject.path}
-          fillSpace={activeTab === 'files'}
-        />
-      </div>
+      <EditorSidebar
+        editingFile={editingFile}
+        isMobile={isMobile}
+        editorExpanded={editorExpanded}
+        editorWidth={editorWidth}
+        hasManualWidth={hasManualWidth}
+        resizeHandleRef={resizeHandleRef}
+        onResizeStart={handleResizeStart}
+        onCloseEditor={handleCloseEditor}
+        onToggleEditorExpand={handleToggleEditorExpand}
+        projectPath={selectedProject.path}
+        fillSpace={activeTab === 'files'}
+      />
     </div>
   );
 }

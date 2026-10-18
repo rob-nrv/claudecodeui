@@ -190,12 +190,22 @@ export default function SidebarContent({
     projectListProps.editingProject || projectListProps.editingSession,
   );
 
+  // "New" starts a session where the user already is; with no project open it
+  // opens the project picker, where the machine (computer / NAS) is chosen.
+  const handleNewFromHeader = () => {
+    const target = projectListProps.selectedProject ?? null;
+    if (target) {
+      projectListProps.onNewSession(target);
+      return;
+    }
+    onCreateProject();
+  };
+
   return (
-    <div
-      className="flex h-full flex-col bg-background/80 backdrop-blur-sm md:w-72 md:select-none"
-      style={{}}
-    >
+    <div className="flex h-full w-full flex-col bg-c-sidebar md:w-[286px] md:select-none">
       <SidebarHeader
+        onNewSession={handleNewFromHeader}
+        onShowSettings={onShowSettings}
         isPWA={isPWA}
         isMobile={isMobile}
         isLoading={isLoading}
@@ -215,7 +225,7 @@ export default function SidebarContent({
         t={t}
       />
 
-      <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
+      <ScrollArea className="flex-1 overflow-y-auto overscroll-contain pb-3">
         {showConversationSearch ? (
           isSearching && !conversationResults ? (
             <div className="px-4 py-12 text-center md:py-8">

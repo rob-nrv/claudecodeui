@@ -79,7 +79,7 @@ const CodeBlock = ({ node: _node, className, children, forceBlock, ...props }: C
   if (shouldInline) {
     return (
       <code
-        className={`whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[0.875em] text-foreground ${className || ''
+        className={`whitespace-pre-wrap break-words rounded-[4px] border border-c-card-border bg-c-surface px-[3px] py-px font-[family-name:var(--c-mono)] text-[12.5px] leading-[18px] text-c-code ${className || ''
           }`}
         {...props}
       >
@@ -188,7 +188,7 @@ const markdownComponents = {
     </blockquote>
   ),
   hr: () => <hr className="my-4 border-t border-border" />,
-  p: ({ children }: { children?: React.ReactNode }) => <div className="mb-2 last:mb-0">{children}</div>,
+  p: ({ children }: { children?: React.ReactNode }) => <div className="mb-[14px] last:mb-0">{children}</div>,
   ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className="mb-2 list-outside list-disc space-y-1 pl-5 marker:text-current last:mb-0">{children}</ul>
   ),

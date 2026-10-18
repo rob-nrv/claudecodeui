@@ -109,8 +109,8 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       return;
     }
 
-    // 0 for "Other"
-    if (e.key === '0') {
+    // The number after the options (as shown on the card), or 0, for "Other"
+    if (e.key === '0' || num === optCount + 1) {
       e.preventDefault();
       toggleOther(currentStep, multi);
       return;
@@ -145,242 +145,104 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   const isFirst = currentStep === 0;
   const hasCurrentSelection = selected.size > 0 || (isOtherOn && (otherTexts.get(currentStep) || '').trim().length > 0);
 
+  const otherNumber = q.options.length + 1;
+
+  // Claude desktop question card (references C1–C11, 2026-07/08): a rounded
+  // card, "1/2" step badge + question in bold, one row per option (title,
+  // muted description, number on the right), an "Other" row with its input,
+  // then Back / Skip / Next-or-Submit. Colours use the current tokens; the
+  // references come from an older theme (page #20201f instead of #151515).
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
-      className={`w-full outline-none transition-all duration-500 ease-out ${
-        mounted ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
-      }`}
+      className={`w-full outline-none transition-all duration-300 ease-out ${mounted ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}
     >
-      <div className="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-lg dark:border-gray-700/50 dark:bg-gray-800/90 dark:shadow-2xl">
-        {/* Accent line */}
-        <div className="absolute left-0 right-0 top-0 h-[2px] bg-gradient-to-r from-blue-500 via-cyan-400 to-teal-400" />
-
-        {/* Header + Question — compact */}
-        <div className="px-4 pb-2 pt-3.5">
-          <div className="mb-1.5 flex items-center gap-2.5">
-            {/* Question icon */}
-            <div className="relative flex-shrink-0">
-              <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/10 dark:from-blue-400/15 dark:to-cyan-400/15">
-                <svg className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827m0 3h.01" />
-                </svg>
-              </div>
-              <div className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-pulse rounded-full bg-cyan-400 dark:bg-cyan-500" />
-            </div>
-
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span className="text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                Claude needs your input
-              </span>
-              {q.header && (
-                <span className="inline-flex items-center rounded border border-blue-100 bg-blue-50 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-blue-600 dark:border-blue-800/50 dark:bg-blue-900/30 dark:text-blue-400">
-                  {q.header}
-                </span>
-              )}
-            </div>
-
-            {/* Step counter */}
-            {!isSingle && (
-              <span className="flex-shrink-0 text-[10px] tabular-nums text-gray-400 dark:text-gray-500">
-                {currentStep + 1}/{total}
-              </span>
-            )}
-          </div>
-
-          {/* Progress dots (multi-question) */}
+      <div className="rounded-[12px] bg-c-surface px-3 pb-3 pt-[11px] text-[14px] leading-5 text-c-text">
+        <div className="mb-[9px] flex items-start gap-2">
           {!isSingle && (
-            <div className="mb-2 flex items-center gap-1">
-              {questions.map((_, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setCurrentStep(i)}
-                  className={`h-[3px] rounded-full transition-all duration-300 ${
-                    i === currentStep
-                      ? 'w-5 bg-blue-500 dark:bg-blue-400'
-                      : i < currentStep
-                        ? 'w-2.5 bg-blue-300 dark:bg-blue-600'
-                        : 'w-2.5 bg-gray-200 dark:bg-gray-700'
-                  }`}
-                />
-              ))}
-            </div>
+            <span className="mt-px flex-shrink-0 rounded-[4px] bg-[#4a3f1a] px-[5px] text-[12px] font-semibold leading-[18px] text-[#e8c255]">
+              {currentStep + 1}/{total}
+            </span>
           )}
-
-          {/* Question text */}
-          <p className="text-[14px] font-medium leading-snug text-gray-900 dark:text-gray-100">
-            {q.question}
-          </p>
-          {multi && (
-            <span className="text-[10px] text-gray-400 dark:text-gray-500">Select all that apply</span>
-          )}
-        </div>
-
-        {/* Options — tight spacing */}
-        <div className="scrollbar-thin max-h-48 overflow-y-auto px-4 pb-2" role={multi ? 'group' : 'radiogroup'} aria-label={q.question}>
-          <div className="space-y-1">
-            {q.options.map((opt, optIdx) => {
-              const isSelected = selected.has(opt.label);
-              return (
-                <button
-                  key={opt.label}
-                  type="button"
-                  onClick={() => toggleOption(currentStep, opt.label, multi)}
-                  className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all duration-150 ${
-                    isSelected
-                      ? 'border-blue-300 bg-blue-50/80 ring-1 ring-blue-200/50 dark:border-blue-600 dark:bg-blue-900/25 dark:ring-blue-700/30'
-                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50/60 dark:border-gray-700/60 dark:hover:border-gray-600 dark:hover:bg-gray-700/40'
-                  }`}
-                >
-                  {/* Keyboard hint */}
-                  <kbd className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded font-mono text-[10px] transition-all duration-150 ${
-                    isSelected
-                      ? 'bg-blue-500 font-semibold text-white dark:bg-blue-500'
-                      : 'border border-gray-200 bg-gray-100 text-gray-400 group-hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500 dark:group-hover:border-gray-600'
-                  }`}>
-                    {optIdx + 1}
-                  </kbd>
-
-                  <div className="min-w-0 flex-1">
-                    <div className={`text-[13px] leading-tight transition-colors duration-150 ${
-                      isSelected
-                        ? 'font-medium text-gray-900 dark:text-gray-100'
-                        : 'text-gray-700 dark:text-gray-300'
-                    }`}>
-                      {opt.label}
-                    </div>
-                    {opt.description && (
-                      <div className={`text-[11px] leading-snug transition-colors duration-150 ${
-                        isSelected
-                          ? 'text-blue-600/70 dark:text-blue-300/70'
-                          : 'text-gray-400 dark:text-gray-500'
-                      }`}>
-                        {opt.description}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Selection check */}
-                  {isSelected && (
-                    <svg className="h-4 w-4 flex-shrink-0 text-blue-500 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                    </svg>
-                  )}
-                </button>
-              );
-            })}
-
-            {/* "Other" option */}
-            <button
-              type="button"
-              onClick={() => toggleOther(currentStep, multi)}
-              className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all duration-150 ${
-                isOtherOn
-                  ? 'border-blue-300 bg-blue-50/80 ring-1 ring-blue-200/50 dark:border-blue-600 dark:bg-blue-900/25 dark:ring-blue-700/30'
-                  : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/60 dark:border-gray-700/60 dark:hover:border-gray-600 dark:hover:bg-gray-700/40'
-              }`}
-            >
-              <kbd className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded font-mono text-[10px] transition-all duration-150 ${
-                isOtherOn
-                  ? 'bg-blue-500 font-semibold text-white dark:bg-blue-500'
-                  : 'border border-gray-200 bg-gray-100 text-gray-400 group-hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500 dark:group-hover:border-gray-600'
-              }`}>
-                0
-              </kbd>
-              <span className={`text-[13px] leading-tight transition-colors ${
-                isOtherOn
-                  ? 'font-medium text-gray-900 dark:text-gray-100'
-                  : 'text-gray-500 dark:text-gray-400'
-              }`}>
-                Other...
-              </span>
-              {isOtherOn && (
-                <svg className="ml-auto h-4 w-4 flex-shrink-0 text-blue-500 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                </svg>
-              )}
-            </button>
-
-            {/* Other text input — inline */}
-            {isOtherOn && (
-              <div className="pl-[30px] pr-0.5">
-                <div className="relative">
-                  <input
-                    ref={otherInputRef}
-                    type="text"
-                    value={otherTexts.get(currentStep) || ''}
-                    onChange={(e) => setOtherText(currentStep, e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        if (isLast) handleSubmit();
-                        else setCurrentStep(s => s + 1);
-                      }
-                      // Prevent container keydown from firing
-                      e.stopPropagation();
-                    }}
-                    placeholder="Type your answer..."
-                    className="w-full rounded-lg border-0 bg-gray-50 px-3 py-1.5 text-[13px] text-gray-900 outline-none ring-1 ring-gray-200 transition-shadow duration-200 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-400 dark:bg-gray-900/60 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-600 dark:focus:ring-blue-500"
-                  />
-                  <kbd className="absolute right-2 top-1/2 -translate-y-1/2 rounded border border-gray-200 bg-gray-100 px-1 py-0.5 font-mono text-[9px] text-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-600">
-                    Enter
-                  </kbd>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Footer — compact */}
-        <div className="flex items-center justify-between gap-2 border-t border-gray-100 bg-gray-50/50 px-4 py-2 dark:border-gray-700/50 dark:bg-gray-800/50">
+          <p className="min-w-0 flex-1 font-semibold">{q.question}</p>
           <button
             type="button"
             onClick={handleSkip}
             disabled={isSubmitting}
-            className="text-[11px] text-gray-400 transition-colors hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:text-gray-300"
+            aria-label="Skip"
+            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-c-text-3 hover:bg-c-active hover:text-c-text"
           >
-            {isSingle ? 'Skip' : 'Skip all'}
-            <span className="ml-1 text-[9px] text-gray-300 dark:text-gray-600">Esc</span>
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
+        </div>
 
-          <div className="flex items-center gap-1.5">
-            {!isSingle && !isFirst && (
+        <div className="space-y-[3px]" role={multi ? 'group' : 'radiogroup'} aria-label={q.question}>
+          {q.options.map((option, index) => {
+            const isSelected = selected.has(option.label);
+            return (
               <button
+                key={option.label}
                 type="button"
-                onClick={() => setCurrentStep(s => s - 1)}
-                className="inline-flex items-center gap-0.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-gray-600 transition-all duration-150 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/60"
+                role={multi ? 'checkbox' : 'radio'}
+                aria-checked={isSelected}
+                onClick={() => toggleOption(currentStep, option.label, multi)}
+                className={`flex w-full items-center gap-3 rounded-[6px] px-2 py-[7px] text-left transition-colors ${isSelected ? 'bg-[#3a3a39] ring-1 ring-inset ring-c-text-3/60' : 'bg-[#2a2a2a] hover:bg-[#303030]'}`}
               >
-                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
-                Back
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold text-c-text">{option.label}</span>
+                  {option.description && <span className="block text-[13px] leading-[18px] text-c-text-3">{option.description}</span>}
+                </span>
+                <span className="flex-shrink-0 text-[13px] tabular-nums text-c-text-3">{index + 1}</span>
               </button>
-            )}
+            );
+          })}
 
-            {isLast ? (
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={isSubmitting || (!hasCurrentSelection && !Object.keys(buildAnswers()).length)}
-                className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-30 disabled:shadow-none dark:from-blue-500 dark:to-blue-600"
-              >
-                {isSubmitting ? 'Sending…' : 'Submit'}
-                {!isSubmitting && <span className="ml-0.5 font-mono text-[9px] opacity-70">Enter</span>}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setCurrentStep(s => s + 1)}
-                className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md dark:from-blue-500 dark:to-blue-600"
-              >
-                Next
-                <span className="ml-0.5 font-mono text-[9px] opacity-70">Enter</span>
-              </button>
-            )}
+          <div className={`rounded-[6px] px-2 py-[7px] ${isOtherOn ? 'bg-[#3a3a39] ring-1 ring-inset ring-c-text-3/60' : 'bg-[#2a2a2a]'}`}>
+            <button type="button" onClick={() => toggleOther(currentStep, multi)} aria-pressed={isOtherOn} className="flex w-full items-center gap-3 text-left">
+              <span className="min-w-0 flex-1 font-semibold">Other</span>
+              <span className="flex-shrink-0 text-[13px] tabular-nums text-c-text-3">{otherNumber}</span>
+            </button>
+            <input
+              ref={otherInputRef}
+              type="text"
+              value={otherTexts.get(currentStep) || ''}
+              onFocus={() => { if (!isOtherOn) toggleOther(currentStep, multi); }}
+              onChange={(event) => setOtherText(currentStep, event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  if (isLast) handleSubmit(); else setCurrentStep((step) => step + 1);
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  handleSkip();
+                }
+              }}
+              placeholder="Type your own answer here"
+              className="mt-[6px] block h-[30px] w-full rounded-[6px] bg-[#383838] px-2 text-[13px] text-c-text outline-none placeholder:text-c-text-3"
+            />
           </div>
+        </div>
+
+        <div className="mt-[10px] flex items-center gap-2">
+          {!isFirst && (
+            <button type="button" onClick={() => setCurrentStep((step) => step - 1)} className="h-[26px] rounded-[6px] bg-[#383838] px-[9px] text-[13px] font-medium text-c-text-2 hover:text-c-text">
+              Back
+            </button>
+          )}
+          <div className="flex-1" />
+          <button type="button" onClick={handleSkip} disabled={isSubmitting} className="h-[26px] rounded-[6px] bg-[#383838] px-[9px] text-[13px] font-medium text-c-text-2 hover:text-c-text disabled:opacity-50">
+            Skip
+          </button>
+          <button
+            type="button"
+            onClick={() => (isLast ? handleSubmit() : setCurrentStep((step) => step + 1))}
+            disabled={isSubmitting || (!hasCurrentSelection && isLast && total === 1)}
+            className="h-[26px] rounded-[6px] bg-c-text px-[9px] text-[13px] font-medium text-c-bg disabled:bg-[#2a2a2a] disabled:text-c-text-3"
+          >
+            {isSubmitting ? 'Sending…' : (<>{isLast ? 'Submit' : 'Next'} <span className="text-[12px] opacity-60">Enter</span></>)}
+          </button>
         </div>
       </div>
     </div>

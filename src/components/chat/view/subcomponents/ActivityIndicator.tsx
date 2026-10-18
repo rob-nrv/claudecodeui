@@ -72,43 +72,27 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
   const elapsedLabel = minutes < 1
     ? t('claudeStatus.elapsed.seconds', { count: seconds, defaultValue: '{{count}}s' })
     : t('claudeStatus.elapsed.minutesSeconds', { minutes, seconds, defaultValue: '{{minutes}}m {{seconds}}s' });
-  const tabSurfaceClassName = [
-    'chat-activity-tab inline-flex h-8 items-center rounded-b-none rounded-t-lg border border-b-0 bg-card px-3 text-xs transition-all duration-200',
-    isInputFocused
-      ? 'border-primary/30 shadow-[0_-1px_2px_hsl(var(--foreground)/0.08),1px_0_2px_hsl(var(--foreground)/0.06),-1px_0_2px_hsl(var(--foreground)/0.06)]'
-      : 'border-border/50 shadow-[0_-1px_1px_hsl(var(--foreground)/0.04),1px_0_1px_hsl(var(--foreground)/0.03),-1px_0_1px_hsl(var(--foreground)/0.03)]',
-  ].join(' ');
-
+  // Claude desktop run line, at the end of the conversation: three accent dots,
+  // elapsed time and the current status ("•• 36m 3s · Thinking"). Stopping
+  // lives in the composer's stop button (and Esc), as in Claude desktop.
   return (
     <div
-      className={`pointer-events-none bg-transparent ${
+      role="status"
+      aria-live="polite"
+      className={`mt-[35px] flex h-5 items-center gap-[9px] pl-[3px] text-[14px] leading-5 text-c-text-3 ${
         isExiting ? 'chat-activity-exit' : 'chat-activity-enter'
       }`}
+      data-input-focused={isInputFocused || undefined}
+      data-can-interrupt={(renderedActivity.canInterrupt && Boolean(onAbort)) || undefined}
     >
-      <div className="flex items-end justify-between gap-2">
-        <div className={`${tabSurfaceClassName} gap-2`}>
-          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
-          <Shimmer className="font-medium">{`${label}…`}</Shimmer>
-          <span className="tabular-nums text-muted-foreground/60">{elapsedLabel}</span>
-        </div>
-
-        {renderedActivity.canInterrupt && onAbort && (
-          <button
-            type="button"
-            onClick={onAbort}
-            className={`${tabSurfaceClassName} pointer-events-auto gap-1.5 text-muted-foreground hover:bg-card hover:text-destructive`}
-            aria-label={t('claudeStatus.stop', { defaultValue: 'Stop' })}
-          >
-            <svg className="h-2.5 w-2.5 fill-current" viewBox="0 0 24 24" aria-hidden>
-              <rect x="5" y="5" width="14" height="14" rx="2" />
-            </svg>
-            <span>{t('claudeStatus.stop', { defaultValue: 'Stop' })}</span>
-            <kbd className="hidden rounded border border-border/60 px-1 text-[10px] text-muted-foreground/70 sm:inline-block">
-              esc
-            </kbd>
-          </button>
-        )}
-      </div>
+      <span className="claude-run-dots flex items-center gap-[2px]" aria-hidden>
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="tabular-nums">{elapsedLabel}</span>
+      <span aria-hidden>·</span>
+      <Shimmer>{label}</Shimmer>
     </div>
   );
 }

@@ -1,28 +1,6 @@
-import { ActivityIcon } from 'lucide-react';
-
-type TokenUsageSummaryProps = {
+type ContextRingProps = {
   usage: Record<string, unknown> | null;
   onClick?: () => void;
-};
-
-const formatTokenCount = (value: number) => {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '0';
-  }
-
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
-  }
-
-  if (value >= 10_000) {
-    return `${Math.round(value / 1_000)}K`;
-  }
-
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}K`;
-  }
-
-  return value.toLocaleString();
 };
 
 const readUsageNumber = (value: unknown) => {
@@ -30,7 +8,14 @@ const readUsageNumber = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-export default function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryProps) {
+const RADIUS = 5.25;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+/**
+ * Claude desktop context indicator: a 13px ring whose blue arc is the share of
+ * the context window the session has used. Opens the token usage details.
+ */
+export default function ContextRing({ usage, onClick }: ContextRingProps) {
   const breakdown =
     usage?.breakdown && typeof usage.breakdown === 'object'
       ? usage.breakdown as Record<string, unknown>
@@ -38,20 +23,35 @@ export default function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryP
   const inputTokens = readUsageNumber(usage?.inputTokens ?? breakdown?.input);
   const outputTokens = readUsageNumber(usage?.outputTokens ?? breakdown?.output);
   const usedTokens = readUsageNumber(usage?.used) || inputTokens + outputTokens;
+  const totalTokens = readUsageNumber(usage?.total);
+  const ratio = totalTokens > 0 ? Math.min(1, usedTokens / totalTokens) : 0;
+  const label = totalTokens > 0
+    ? `${Math.round(ratio * 100)}% of context used (${usedTokens.toLocaleString()} / ${totalTokens.toLocaleString()} tokens)`
+    : `${usedTokens.toLocaleString()} tokens used`;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 bg-background/70 px-2 text-xs text-muted-foreground shadow-sm transition-colors hover:border-primary/25 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:gap-2 sm:px-2.5"
-      title={`${usedTokens.toLocaleString()} tokens used`}
-      aria-label="Show token usage"
+      title={label}
+      aria-label={label}
+      className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-c-hover"
     >
-      <span className="grid h-5 w-5 place-items-center rounded-md bg-primary/10 text-primary">
-        <ActivityIcon className="h-3.5 w-3.5" />
-      </span>
-      <span className="font-medium text-foreground">{formatTokenCount(usedTokens)}</span>
-      <span className="hidden text-muted-foreground/70 sm:inline">tokens</span>
+      <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+        <circle cx="7.5" cy="7.5" r={RADIUS} fill="none" stroke="currentColor" strokeWidth="2" className="text-c-text-3/60" />
+        <circle
+          cx="7.5"
+          cy="7.5"
+          r={RADIUS}
+          fill="none"
+          stroke="#3987e5"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={`${ratio * CIRCUMFERENCE} ${CIRCUMFERENCE}`}
+          transform="rotate(-90 7.5 7.5)"
+          opacity={ratio > 0 ? 1 : 0}
+        />
+      </svg>
     </button>
   );
 }

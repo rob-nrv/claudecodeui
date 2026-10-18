@@ -210,9 +210,9 @@ function AppContentInner() {
   }, []);
 
   return (
-    <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
+    <div className="fixed inset-0 flex bg-c-bg" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
       {!isMobile ? (
-        <div className="h-full flex-shrink-0 border-r border-border/50">
+        <div className="h-full flex-shrink-0 border-r border-c-sidebar-border bg-c-sidebar">
           <Sidebar {...sidebarSharedProps} />
         </div>
       ) : (
@@ -234,7 +234,7 @@ function AppContentInner() {
             aria-label={t('versionUpdate.ariaLabels.closeSidebar')}
           />
           <div
-            className={`relative h-full w-[85vw] max-w-sm transform border-r border-border/40 bg-card transition-transform duration-150 ease-out sm:w-80 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+            className={`relative h-full w-[85vw] max-w-sm transform border-r border-c-sidebar-border bg-c-sidebar transition-transform duration-150 ease-out sm:w-80 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
               }`}
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}

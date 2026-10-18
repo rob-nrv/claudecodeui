@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { memo, useCallback, useMemo } from 'react';
-import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
 import type {
@@ -76,6 +76,10 @@ interface ChatMessagesPaneProps {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
+  /** Claude desktop right panel (Environment / Context / Outputs), sticky beside the column. */
+  sidePanel?: ReactNode;
+  /** Live run line ("•• 36m 3s · 1.4k tokens · Thinking") rendered after the last message. */
+  footer?: ReactNode;
 }
 
 function ChatMessagesPane({
@@ -129,6 +133,8 @@ function ChatMessagesPane({
   showRawParameters,
   showThinking,
   selectedProject,
+  sidePanel,
+  footer,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const groupedVisibleMessages = useMemo(
@@ -176,18 +182,13 @@ function ChatMessagesPane({
       ref={scrollContainerRef}
       onWheel={onWheel}
       onTouchMove={onTouchMove}
-      className={`chat-messages-pane relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-3 sm:pt-4 ${
-        hasActivityIndicator ? 'pb-12 sm:pb-14' : 'pb-3 sm:pb-4'
-      }`}
+      className="chat-messages-pane claude-scroll-fade relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
     >
-      {chatMessages.length > 0 && (
-        <div className="pointer-events-none sticky right-4 top-3 z-10 mb-2 flex justify-end sm:px-4">
-          <div className="pointer-events-auto">
-            <ChatExportMenu messages={chatMessages} sessionTitle={selectedSession?.title} />
-          </div>
-        </div>
-      )}
-      <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
+      {/* Claude desktop layout (measured at 1207 and 2560 px wide): the column is
+          centred on the whole conversation area and only moves left when it would
+          run under the 289px side panel — see .claude-col in index.css. */}
+      <div className={`claude-pane-content relative min-h-full ${sidePanel ? 'has-side-panel' : ''}`}>
+      <div className={`claude-col pt-[13px] ${hasActivityIndicator ? 'pb-10' : 'pb-6'}`}>
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
           <div className="flex items-center justify-center space-x-2">
@@ -226,24 +227,21 @@ function ChatMessagesPane({
         <>
           {/* Loading indicator for older messages (hide when load-all is active) */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
-            <div className="py-3 text-center text-gray-500 dark:text-gray-400">
+            <div className="py-3 text-center text-c-text-3">
               <div className="flex items-center justify-center space-x-2">
-                <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
-                <p className="text-sm">{t('session.loading.olderMessages')}</p>
+                <div className="h-3.5 w-3.5 animate-spin rounded-full border-b-2 border-c-text-3" />
+                <p className="text-[13px]">{t('session.loading.olderMessages')}</p>
               </div>
             </div>
           )}
 
-          {/* Indicator showing there are more messages to load (hide when all loaded) */}
-          {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && (
-            <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-              {totalMessages > 0 && (
-                <span>
-                  {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
-                  <span className="text-xs">{t('session.messages.scrollToLoad')}</span>
-                </span>
-              )}
-            </div>
+          {/* Older messages load silently when scrolled to the top (Claude desktop
+              shows no "showing N of M" banner); the count stays available to
+              assistive technology. */}
+          {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && totalMessages > 0 && (
+            <p className="sr-only">
+              {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })} {t('session.messages.scrollToLoad')}
+            </p>
           )}
 
           <LoadAllMessagesOverlay
@@ -317,7 +315,21 @@ function ChatMessagesPane({
               );
             });
           })()}
+          {footer}
         </>
+      )}
+      </div>
+      {sidePanel && (
+        <aside className="claude-side-aside absolute inset-y-0 right-0 w-[279px]">
+          <div className="sticky top-[17px] pb-6 pr-px">
+            {sidePanel}
+            {chatMessages.length > 0 && (
+              <div className="mt-2 flex justify-end">
+                <ChatExportMenu messages={chatMessages} sessionTitle={selectedSession?.title} />
+              </div>
+            )}
+          </div>
+        </aside>
       )}
       </div>
     </div>

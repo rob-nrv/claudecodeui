@@ -1,7 +1,5 @@
-import { Plus } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Button } from '../../../../shared/view/ui';
 import type { SessionActivityMap } from '../../../../hooks/useSessionProtection';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
@@ -44,14 +42,9 @@ function SessionListSkeleton() {
   return (
     <>
       {Array.from({ length: 3 }).map((_, index) => (
-        <div key={index} className="rounded-md p-2">
-          <div className="flex items-start gap-2">
-            <div className="mt-0.5 h-3 w-3 animate-pulse rounded-full bg-muted" />
-            <div className="flex-1 space-y-1">
-              <div className="h-3 animate-pulse rounded bg-muted" style={{ width: `${60 + index * 15}%` }} />
-              <div className="h-2 w-1/2 animate-pulse rounded bg-muted" />
-            </div>
-          </div>
+        <div key={index} className="flex h-[26px] items-center gap-3 pl-[13px]">
+          <div className="h-[6px] w-[6px] rounded-full bg-c-active" />
+          <div className="h-2.5 animate-pulse rounded bg-c-active" style={{ width: `${45 + index * 15}%` }} />
         </div>
       ))}
     </>
@@ -90,37 +83,23 @@ export default function SidebarProjectSessions({
 
   const hasSessions = sessions.length > 0;
 
+  // The group header's "+" starts a session (Claude desktop has no separate
+  // "New session" button inside a group).
   return (
-    <div className="ml-3 space-y-1 border-l border-border pl-3">
-      <div className="px-3 pb-1 pt-1 md:hidden">
+    <div>
+      {!initialSessionsLoaded ? (
+        <SessionListSkeleton />
+      ) : !hasSessions ? (
         <button
-          className="flex h-8 w-full items-center justify-center gap-2 rounded-md bg-primary text-xs font-medium text-primary-foreground transition-all duration-150 hover:bg-primary/90 active:scale-[0.98]"
+          type="button"
+          className="flex h-[26px] w-full items-center rounded-md pl-[32px] text-left text-[13.5px] text-c-text-3 hover:bg-c-hover"
           onClick={() => {
             onProjectSelect(project);
             onNewSession(project);
           }}
         >
-          <Plus className="h-3 w-3" />
           {t('sessions.newSession')}
         </button>
-      </div>
-
-      <Button
-        variant="default"
-        size="sm"
-        className="hidden h-8 w-full justify-start gap-2 bg-primary text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 md:flex"
-        onClick={() => onNewSession(project)}
-      >
-        <Plus className="h-3 w-3" />
-        {t('sessions.newSession')}
-      </Button>
-
-      {!initialSessionsLoaded ? (
-        <SessionListSkeleton />
-      ) : !hasSessions ? (
-        <div className="px-3 py-2 text-left">
-          <p className="text-xs text-muted-foreground">{t('sessions.noSessions')}</p>
-        </div>
       ) : (
         <>
           {sessions.map((session) => (
@@ -149,15 +128,14 @@ export default function SidebarProjectSessions({
           ))}
 
           {hasMoreSessions && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-full justify-center text-xs text-muted-foreground hover:text-foreground"
+            <button
+              type="button"
+              className="flex h-[26px] w-full items-center rounded-md pl-[32px] text-left text-[13.5px] text-c-text-3 hover:bg-c-hover hover:text-c-text-2 disabled:opacity-60"
               onClick={() => onLoadMoreSessions(project.projectId)}
               disabled={isLoadingMoreSessions}
             >
-              {isLoadingMoreSessions ? t('sessions.loadingSessions') : 'Load more sessions'}
-            </Button>
+              {isLoadingMoreSessions ? t('sessions.loadingSessions') : t('sessions.showMore', 'Show more')}
+            </button>
           )}
         </>
       )}
